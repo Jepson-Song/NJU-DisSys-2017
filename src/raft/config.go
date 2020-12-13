@@ -8,18 +8,22 @@ package raft
 // test with the original before submitting.
 //
 
-import "labrpc"
-import "log"
-import "sync"
-import "testing"
-import "runtime"
-import crand "crypto/rand"
-import "encoding/base64"
-import "sync/atomic"
-import "time"
-import "fmt"
+import (
+	"labrpc"
+	"log"
+	"runtime"
+	"sync"
+	"testing"
+
+	crand "crypto/rand"
+	"encoding/base64"
+	"fmt"
+	"sync/atomic"
+	"time"
+)
 
 func randstring(n int) string {
+	//log.Printf("config->randstring")
 	b := make([]byte, 2*n)
 	crand.Read(b)
 	s := base64.URLEncoding.EncodeToString(b)
@@ -41,6 +45,7 @@ type config struct {
 }
 
 func make_config(t *testing.T, n int, unreliable bool) *config {
+	//log.Printf("config->make_config")
 	runtime.GOMAXPROCS(4)
 	cfg := &config{}
 	cfg.t = t
@@ -73,6 +78,7 @@ func make_config(t *testing.T, n int, unreliable bool) *config {
 
 // shut down a Raft server but save its persistent state.
 func (cfg *config) crash1(i int) {
+	//log.Printf("config->crash1")
 	cfg.disconnect(i)
 	cfg.net.DeleteServer(i) // disable client connections to the server.
 
@@ -110,6 +116,7 @@ func (cfg *config) crash1(i int) {
 // this server. since we cannot really kill it.
 //
 func (cfg *config) start1(i int) {
+	//log.Printf("config->start1")
 	cfg.crash1(i)
 
 	// a fresh set of outgoing ClientEnd names.
@@ -189,6 +196,7 @@ func (cfg *config) start1(i int) {
 }
 
 func (cfg *config) cleanup() {
+	//log.Printf("config->cleanup")
 	for i := 0; i < len(cfg.rafts); i++ {
 		if cfg.rafts[i] != nil {
 			cfg.rafts[i].Kill()
@@ -199,6 +207,7 @@ func (cfg *config) cleanup() {
 
 // attach server i to the net.
 func (cfg *config) connect(i int) {
+	//log.Printf("config->connect")
 	// fmt.Printf("connect(%d)\n", i)
 
 	cfg.connected[i] = true
@@ -222,6 +231,7 @@ func (cfg *config) connect(i int) {
 
 // detach server i from the net.
 func (cfg *config) disconnect(i int) {
+	//log.Printf("config->disconnect")
 	// fmt.Printf("disconnect(%d)\n", i)
 
 	cfg.connected[i] = false
@@ -244,20 +254,24 @@ func (cfg *config) disconnect(i int) {
 }
 
 func (cfg *config) rpcCount(server int) int {
+	//log.Printf("config->rpcCount")
 	return cfg.net.GetCount(server)
 }
 
 func (cfg *config) setunreliable(unrel bool) {
+	//log.Printf("config->setunreliable")
 	cfg.net.Reliable(!unrel)
 }
 
 func (cfg *config) setlongreordering(longrel bool) {
+	//log.Printf("config->setlongreordering")
 	cfg.net.LongReordering(longrel)
 }
 
 // check that there's exactly one leader.
 // try a few times in case re-elections are needed.
 func (cfg *config) checkOneLeader() int {
+	//log.Printf("config->checkOneLeader")
 	for iters := 0; iters < 10; iters++ {
 		time.Sleep(500 * time.Millisecond)
 		leaders := make(map[int][]int)
@@ -289,6 +303,7 @@ func (cfg *config) checkOneLeader() int {
 
 // check that everyone agrees on the term.
 func (cfg *config) checkTerms() int {
+	//log.Printf("config->checkTerms")
 	term := -1
 	for i := 0; i < cfg.n; i++ {
 		if cfg.connected[i] {
@@ -305,6 +320,7 @@ func (cfg *config) checkTerms() int {
 
 // check that there's no leader
 func (cfg *config) checkNoLeader() {
+	//log.Printf("config->checkNoLeader")
 	for i := 0; i < cfg.n; i++ {
 		if cfg.connected[i] {
 			_, is_leader := cfg.rafts[i].GetState()
@@ -317,6 +333,7 @@ func (cfg *config) checkNoLeader() {
 
 // how many servers think a log entry is committed?
 func (cfg *config) nCommitted(index int) (int, interface{}) {
+	//log.Printf("config->nCommitted")
 	count := 0
 	cmd := -1
 	for i := 0; i < len(cfg.rafts); i++ {
@@ -343,6 +360,7 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 // wait for at least n servers to commit.
 // but don't wait forever.
 func (cfg *config) wait(index int, n int, startTerm int) interface{} {
+	//log.Printf("config->wait")
 	to := 10 * time.Millisecond
 	for iters := 0; iters < 30; iters++ {
 		nd, _ := cfg.nCommitted(index)
@@ -380,6 +398,7 @@ func (cfg *config) wait(index int, n int, startTerm int) interface{} {
 // as do the threads that read from applyCh.
 // returns index.
 func (cfg *config) one(cmd int, expectedServers int) int {
+	//log.Printf("config->one")
 	t0 := time.Now()
 	starts := 0
 	for time.Since(t0).Seconds() < 10 {

@@ -48,14 +48,16 @@ package labrpc
 //   pass svc to srv.AddService()
 //
 
-import "encoding/gob"
-import "bytes"
-import "reflect"
-import "sync"
-import "log"
-import "strings"
-import "math/rand"
-import "time"
+import (
+	"bytes"
+	"encoding/gob"
+	"log"
+	"math/rand"
+	"reflect"
+	"strings"
+	"sync"
+	"time"
+)
 
 type reqMsg struct {
 	endname  interface{} // name of sending ClientEnd
@@ -79,6 +81,8 @@ type ClientEnd struct {
 // the return value indicates success; false means the
 // server couldn't be contacted.
 func (e *ClientEnd) Call(svcMeth string, args interface{}, reply interface{}) bool {
+	//log.Print("labrpc->Call: " + svcMeth)
+	//return true
 	req := reqMsg{}
 	req.endname = e.endname
 	req.svcMeth = svcMeth
@@ -97,7 +101,7 @@ func (e *ClientEnd) Call(svcMeth string, args interface{}, reply interface{}) bo
 		rb := bytes.NewBuffer(rep.reply)
 		rd := gob.NewDecoder(rb)
 		if err := rd.Decode(reply); err != nil {
-			log.Fatalf("ClientEnd.Call(): decode reply: %v\n", err)
+			//log.Fatalf("ClientEnd.Call(): decode reply: %v\n", err)///todo
 		}
 		return true
 	} else {
@@ -118,6 +122,7 @@ type Network struct {
 }
 
 func MakeNetwork() *Network {
+	//log.Printf("labrpc->MakeNetwork")
 	rn := &Network{}
 	rn.reliable = true
 	rn.ends = map[interface{}]*ClientEnd{}
@@ -151,6 +156,7 @@ func (rn *Network) LongReordering(yes bool) {
 }
 
 func (rn *Network) LongDelays(yes bool) {
+	//log.Printf("labrpc->LongDelays")
 	rn.mu.Lock()
 	defer rn.mu.Unlock()
 

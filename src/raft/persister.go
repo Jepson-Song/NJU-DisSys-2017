@@ -9,7 +9,9 @@ package raft
 // test with the original before submitting.
 //
 
-import "sync"
+import (
+	"sync"
+)
 
 type Persister struct {
 	mu        sync.Mutex
@@ -18,10 +20,12 @@ type Persister struct {
 }
 
 func MakePersister() *Persister {
+	//log.Print("persister->MakePersister")
 	return &Persister{}
 }
 
 func (ps *Persister) Copy() *Persister {
+	//log.Print("persister->Copy")
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 	np := MakePersister()
@@ -31,30 +35,35 @@ func (ps *Persister) Copy() *Persister {
 }
 
 func (ps *Persister) SaveRaftState(data []byte) {
+	//log.Print("persister->SaveRaftState")
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 	ps.raftstate = data
 }
 
 func (ps *Persister) ReadRaftState() []byte {
+	//log.Print("persister->ReadRaftState")
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 	return ps.raftstate
 }
 
 func (ps *Persister) RaftStateSize() int {
+	//log.Print("persister->RaftStateSize")
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 	return len(ps.raftstate)
 }
 
 func (ps *Persister) SaveSnapshot(snapshot []byte) {
+	//log.Print("persister->SaveSnapshot")
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 	ps.snapshot = snapshot
 }
 
 func (ps *Persister) ReadSnapshot() []byte {
+	//log.Print("persister->ReadSnapshot")
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 	return ps.snapshot
