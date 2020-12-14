@@ -81,10 +81,11 @@ type ClientEnd struct {
 // the return value indicates success; false means the
 // server couldn't be contacted.
 func (e *ClientEnd) Call(svcMeth string, args interface{}, reply interface{}) bool {
-	//log.Print("labrpc->Call: " + svcMeth)
+	//log.Println("labrpc->Call:", svcMeth, "args", args)
 	//return true
 	req := reqMsg{}
 	req.endname = e.endname
+	//log.Println("labrpc->Call:req.endname", req.endname)
 	req.svcMeth = svcMeth
 	req.argsType = reflect.TypeOf(args)
 	req.replyCh = make(chan replyMsg)
@@ -93,15 +94,28 @@ func (e *ClientEnd) Call(svcMeth string, args interface{}, reply interface{}) bo
 	qe := gob.NewEncoder(qb)
 	qe.Encode(args)
 	req.args = qb.Bytes()
+	//log.Println("labrpc->Call:req.args", req.args)
+	////log.Println("labrpc->Call:", svcMeth, "args", args)
 
 	e.ch <- req
 
 	rep := <-req.replyCh
+	//log.Println("labrpc->Call:rep.ok", rep.ok)
+	////log.Println("labrpc->Call:", svcMeth, "args", args)
 	if rep.ok {
+		////log.Println("labrpc->Call:rep.ok", rep.ok)
 		rb := bytes.NewBuffer(rep.reply)
+		//log.Println("labrpc->Call:rep.reply", rep.reply)
+		//log.Println("labrpc->Call:rb", rb)
+		////log.Println("labrpc->Call:", svcMeth, "args", args)
 		rd := gob.NewDecoder(rb)
-		if err := rd.Decode(reply); err != nil {
-			//log.Fatalf("ClientEnd.Call(): decode reply: %v\n", err)///todo
+		//log.Println("labrpc->Call:rd", rd)
+		////log.Println("labrpc->Call:", svcMeth, "args", args)
+		//log.Println("labrpc->Call:reply", reply)
+		err := rd.Decode(reply)
+		//log.Println("labrpc->Call:err", err)
+		if err != nil {
+			log.Fatalf("ClientEnd.Call(): decode reply: %v\n", err) ///todo
 		}
 		return true
 	} else {
