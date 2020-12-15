@@ -271,7 +271,7 @@ func (cfg *config) setlongreordering(longrel bool) {
 // check that there's exactly one leader.
 // try a few times in case re-elections are needed.
 func (cfg *config) checkOneLeader() int {
-	log.Printf("config->checkOneLeader")
+	//log.Printf("config->checkOneLeader")
 	for iters := 0; iters < 10; iters++ {
 		//fmt.Println("config->checkOneLeader->iters", iters)
 		time.Sleep(500 * time.Millisecond)
@@ -279,10 +279,10 @@ func (cfg *config) checkOneLeader() int {
 		for i := 0; i < cfg.n; i++ {
 			//fmt.Println("config->checkOneLeader->i", i)
 			if cfg.connected[i] {
-				log.Println("connected:", i)
+				//log.Println("connected:", i)
 				if t, leader := cfg.rafts[i].GetState(); leader {
 					leaders[t] = append(leaders[t], i)
-					fmt.Print("raft  is leader, term is", i, t)
+					//fmt.Printf("raft %d is leader, term is %d\n", i, t)
 				}
 			}
 		}

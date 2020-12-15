@@ -21,7 +21,6 @@ import (
 	"bytes"
 	"encoding/gob"
 	"labrpc"
-	"log"
 	"math/rand"
 	"sync"
 	"time"
@@ -44,7 +43,7 @@ const (
 // 先声明map
 
 // ApplyMsg struct
-// as each Raft peer becomes aware that successive log Entries are
+// as each Raft peer becomes aware that Successive log Entries are
 // committed, the peer should send an ApplyMsg to the service (or
 // tester) on the same server, via the applyCh passed to Make().
 //
@@ -53,6 +52,10 @@ type ApplyMsg struct {
 	Command     interface{}
 	UseSnapshot bool   // ignore for lab2; only used in lab3
 	Snapshot    []byte // ignore for lab2; only used in lab3
+
+	CommandValid bool
+	//Command      interface{}
+	CommandIndex int
 }
 
 // LogEntry structure
@@ -116,18 +119,18 @@ type Raft struct {
 func (rf *Raft) GetState() (int, bool) {
 	//log.Print("raft->GetState")
 
-	var Term int
+	var term int
 	var isleader bool
 	// Your code here.
 	rf.mu.Lock() ///todo 这里加锁会造成死锁？
 	defer rf.mu.Unlock()
-	Term = rf.currentTerm
+	term = rf.currentTerm
 	if rf.state == LEADER {
 		isleader = true
 	} else {
 		isleader = false
 	}
-	return Term, isleader
+	return term, isleader
 }
 
 //
@@ -157,11 +160,32 @@ func (rf *Raft) readPersist(data []byte) {
 	// Your code here.
 	//log.Print("raft->readPersist")
 	// Example:///todo
-	r := bytes.NewBuffer(data)
+	/*r := bytes.NewBuffer(data)
 	d := gob.NewDecoder(r)
 	d.Decode(&rf.currentTerm)
 	d.Decode(&rf.votedFor)
-	d.Decode(&rf.log)
+	d.Decode(&rf.log)*/
+
+	if data == nil || len(data) < 1 { // bootstrap without any state?
+		return
+	}
+	// Your code here (2C).
+	// Example:
+	r := bytes.NewBuffer(data)
+	d := gob.NewDecoder(r)
+	var currentTerm int
+	var votedFor int
+	var log []LogEntry
+	if d.Decode(&currentTerm) != nil ||
+		d.Decode(&votedFor) != nil ||
+		d.Decode(&log) != nil {
+		// error...
+		panic("fail to decode state")
+	} else {
+		rf.currentTerm = currentTerm
+		rf.votedFor = votedFor
+		rf.log = log
+	}
 }
 
 // RequestVoteArgs struct
@@ -204,84 +228,49 @@ type RequestVoteReply struct {
 // the struct itself.
 //
 func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *RequestVoteReply) bool {
-	log.Println(">>>>>>>>>>", rf.m1[rf.state], rf.me, "Term", rf.currentTerm, "正式向sever", server, "sendRequestVote >>>>>>>>>>")
-	//log.Println(rf.m1[rf.state], rf.me, "args Term", args.Term, "正式sendRequestVote to sever", server)
+	//log.Println(">>>>>>>>>>", rf.m1[rf.state], rf.me, "Term", rf.currentTerm, "正式向sever", server, "sendRequestVote >>>>>>>>>>")
+	////log.Println(rf.m1[rf.state], rf.me, "args Term", args.Term, "正式sendRequestVote to sever", server)
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 
 	return ok
 }
 
+// compareLog :
+//	return true if A is older(outdated) than B
+func compareLog(lastTermA int, lastIndexA int, lastTermB int, lastIndexB int) bool {
+	if lastTermA != lastTermB {
+		return lastTermA < lastTermB
+	}
+	return lastIndexA < lastIndexB
+}
+
 // RequestVote 其它server对于sendRequestVote的处理
 // example RequestVote RPC handlr.
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
-	log.Println("<<< server", rf.me, "开始处理RequestVote...")
+	//log.Println("<<< server", rf.me, "开始处理RequestVote...")
 	// Your code here.
 
 	rf.mu.Lock() ///todo
 	defer rf.mu.Unlock()
 
-	//rf.mu.Lock()
-	//rf.persist()
-	//defer rf.mu.Unlock()
-	/*
-		log.Println("<<< server", rf.me, "的Term", rf.currentTerm, "和 CANDIDATE", args.CandidateId, "的Term:", args.Term)
-		//如果server的Term比接收到的rpc的Term大，则拒绝投票
-		if rf.currentTerm > args.Term {
-			log.Println("server", rf.me, "的Term比 CANDIDATE", args.CandidateId, "的Term大，所以拒绝投票")
-			reply.Term = rf.currentTerm
-			reply.VoteGranted = false
-			return
-		}
-	*/
 	reply.Term = rf.currentTerm
 	//如果Term比rpc的小，则更新Term并切换成follower身份
 	if rf.currentTerm <= args.Term {
-		//log.Println("<<< server", rf.me, "的Term比 CANDIDATE", args.CandidateId, "的Term小，投票")
+		////log.Println("<<< server", rf.me, "的Term比 CANDIDATE", args.CandidateId, "的Term小，投票")
 		rf.currentTerm = args.Term
 		reply.VoteGranted = true
-		rf.votedFor = args.CandidateId
+		rf.votedFor = -1
+		//log.Println("<<< server", rf.me, "term", rf.currentTerm, "投票")
 		if rf.state != FLLOWER {
-			log.Println("<<< server", rf.me, "退回FOLLOWER")
+			//log.Println("<<< server", rf.me, "退回FOLLOWER")
 			rf.changeStateTo(FLLOWER)
 		}
+		//if{}else{}
+		rf.votedFor = args.CandidateId
 	} else {
-		//log.Println("<<< server", rf.me, "的Term比 CANDIDATE", args.CandidateId, "的Term大，不投票")
+		////log.Println("<<< server", rf.me, "的Term比 CANDIDATE", args.CandidateId, "的Term大，不投票")
+		//log.Println("<<< server", rf.me, "term", rf.currentTerm, "不投票")
 		reply.VoteGranted = false
-	}
-	/*
-		//相等
-		if rf.currentTerm == args.Term {
-			log.Println("<<< server", rf.me, "的Term和 CANDIDATE", args.CandidateId, "的Term相等")
-
-		}
-
-		//比较是不是最新的
-		lastLogIndex := rf.lastLogIndex()
-		if (rf.log[lastLogIndex].Term > args.LastLogTerm) || //如果最后一条log的Term比rpc的大
-			(rf.log[lastLogIndex].Term == args.LastLogTerm && lastLogIndex > args.LastLogIndex) {
-			//或者最后一条的Term和rpc的一样大但是index大
-			//则认为自己是最新的，拒绝投票
-			log.Println("<<< server", rf.me, "的LastLogTerm", rf.log[lastLogIndex].Term, " CANDIDATE", args.CandidateId, "的LastLogTerm", args.LastLogIndex, "自己的新，所以不投票")
-			reply.Term = rf.currentTerm
-			reply.VoteGranted = false
-		} else {
-			log.Println("<<< server", rf.me, "的LastLogTerm", rf.log[lastLogIndex].Term, " CANDIDATE", args.CandidateId, "的LastLogTerm", args.LastLogIndex, "自己的旧，所以投票")
-			//同意投票
-			reply.Term = rf.currentTerm
-			reply.VoteGranted = true
-
-			//一旦投票就要重置electiontimeout
-			rf.electionTimeout.Reset(time.Duration(rand.Intn(151)+150) * time.Millisecond)
-
-			rf.votedFor = args.CandidateId
-
-		}
-	*/
-	if reply.VoteGranted == true {
-		//log.Println("<<< server", rf.me, "异步投票...")
-		go func() {
-			rf.voteCh <- struct{}{}
-		}()
 	}
 }
 
@@ -299,12 +288,14 @@ type AppendEntriesArgs struct {
 // AppendEntriesReply struct
 // example AppendEntries RPC reply structure.
 type AppendEntriesReply struct {
-	Term    int  //currentTerm, for leader to update itself
-	success bool //true if follower contained entry matching PrevLogIndex and PrevLogTerm
+	Term          int  //currentTerm, for leader to update itself
+	Success       bool //true if follower contained entry matching PrevLogIndex and PrevLogTerm
+	ConflictIndex int
+	ConflictTerm  int
 }
 
 func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *AppendEntriesReply) bool {
-	log.Println(">>>>>>>>>>", rf.m1[rf.state], rf.me, "Term", rf.currentTerm, "正式向sever", server, "sendAppendEntries >>>>>>>>>>")
+	//log.Println(">>>>>>>>>>", rf.m1[rf.state], rf.me, "Term", rf.currentTerm, "向sever", server, "sendAppendEntries >>>>>>>>>>")
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 
 	return ok
@@ -315,23 +306,32 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 	//log.Print("raft->AppendEntriesArgs to sever:" + strconv.Itoa(server))
 
 	if rf.currentTerm <= args.Term {
+		//log.Println(rf.m1[rf.state], rf.me, "Term", rf.currentTerm, "<= server", args.LeaderID, "Term", args.Term)
+		rf.votedFor = -1
+		//todo
+		rf.electionTimeout.Reset(time.Duration(rand.Intn(151)+150) * time.Millisecond)
+		if rf.currentTerm < args.Term && rf.state == LEADER {
+			rf.heartbeatTimeout.Stop()
+		}
 		if rf.state != FLLOWER {
-
 			rf.mu.Lock()
 			rf.changeStateTo(FLLOWER)
 			rf.mu.Unlock()
 		}
 
 		reply.Term = rf.currentTerm
-		reply.success = true
+		reply.Success = true
 
-		//log.Println(rf.m1[rf.state], rf.me, "Term", rf.currentTerm, "electionTimeout.Reset")
-		rf.electionTimeout.Reset(time.Duration(rand.Intn(151)+150) * time.Millisecond)
+		////log.Println(rf.m1[rf.state], rf.me, "Term", rf.currentTerm, "electionTimeout.Reset")
+
 	} else {
+		//log.Println(rf.m1[rf.state], rf.me, "Term", rf.currentTerm, "> server", args.LeaderID, "Term", args.Term)
+
 		reply.Term = rf.currentTerm
-		reply.success = false
+		reply.Success = false
 	}
 
+	reply.Success = true
 }
 
 // Start ：
@@ -350,18 +350,18 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 func (rf *Raft) Start(Command interface{}) (int, int, bool) {
 	//log.Print("raft->Start")
 
-	var Term int
+	var term int
 	var index int
 	var isLeader bool
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	Term = rf.currentTerm
+	term = rf.currentTerm
 	if rf.state == LEADER {
 		isLeader = true
 
-		newLogEntry := LogEntry{Command: Command, Term: Term}
+		newLogEntry := LogEntry{Command: Command, Term: term}
 		rf.log = append(rf.log, newLogEntry) //leader增加新条目
 
 		//持久化
@@ -378,7 +378,7 @@ func (rf *Raft) Start(Command interface{}) (int, int, bool) {
 		index = -1
 	}
 
-	return index, Term, isLeader
+	return index, term, isLeader
 }
 
 // Kill ：
@@ -409,7 +409,7 @@ func (rf *Raft) lastLogIndex() int {
 //
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
-	log.Print("raft->Make")
+	//log.Print("raft->Make")
 	/*
 		// 再使用make函数创建一个非nil的map，nil map不能赋值
 		m1 := make(map[int]string)
@@ -459,7 +459,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	}
 
 	rf.state = FLLOWER
-	//log.Println(rf.m1[rf.state], rf.me, "rf.nextIndex", rf.nextIndex)
+	////log.Println(rf.m1[rf.state], rf.me, "rf.nextIndex", rf.nextIndex)
 	//初始身份都是follower
 	rand.Seed(time.Now().UnixNano())                                                         //设置随机种子
 	rf.electionTimeout = time.NewTimer(time.Duration(rand.Intn(151)+150) * time.Millisecond) //150ms到300ms之间的随机值
@@ -480,7 +480,7 @@ func (rf *Raft) stateMachine() {
 			// 当前的身份是follower
 			select {
 			case <-rf.electionTimeout.C: //如果follower的election计时器超时
-				//log.Println("FLLOWER", rf.me, "触发 electionTimeout")
+				////log.Println("FLLOWER", rf.me, "触发 electionTimeout")
 				// 变成candidate
 				rf.mu.Lock()
 				rf.changeStateTo(CANDIDATE)
@@ -498,9 +498,11 @@ func (rf *Raft) stateMachine() {
 			// 当前的身份是candidate
 			select {
 			case <-rf.electionTimeout.C: //如果candidate的election计时器超时
-				//log.Println("CANDIDATE", rf.me, "触发 electionTimeout")
+				////log.Println("CANDIDATE", rf.me, "触发 electionTimeout")
 				// 发起新的选举
-				go rf.elect()
+				rf.mu.Lock()
+				rf.elect()
+				rf.mu.Unlock()
 				rf.electionTimeout.Reset(time.Duration(rand.Intn(151)+150) * time.Millisecond)
 			default:
 			}
@@ -509,9 +511,11 @@ func (rf *Raft) stateMachine() {
 			// 当前的身份是leader
 			select {
 			case <-rf.heartbeatTimeout.C: //如果leader的heartbeat计时器超时
-				//log.Println("LEADER", rf.me, "触发 heartbeatTimeout")
+				////log.Println("LEADER", rf.me, "触发 heartbeatTimeout")
 				// 发送心跳
+				rf.mu.Lock()
 				rf.heartbeat()
+				rf.mu.Unlock()
 			default:
 			}
 		default:
@@ -523,7 +527,7 @@ func (rf *Raft) stateMachine() {
 
 // 选举
 func (rf *Raft) elect() {
-	log.Println(rf.m1[rf.state], rf.me, "开始选举...")
+	//log.Println(rf.m1[rf.state], rf.me, "开始选举...")
 	//requestVoteArgs := &RequestVoteArgs{0, 0, 0, 0}
 	//rf.mu.Lock()
 	//rf.mu.Lock()       ///TODO 这个锁应该加在哪里？
@@ -537,19 +541,19 @@ func (rf *Raft) elect() {
 	requestVoteArgs.Term = rf.currentTerm
 	//requestVoteArgs.from = rf.me
 	requestVoteArgs.CandidateId = rf.me
-	//log.Println(rf.m1[rf.state], rf.me, "Term", rf.currentTerm, "和它发出的args CANDIDATE", requestVoteArgs.CandidateId, "Term", requestVoteArgs.Term)
+	////log.Println(rf.m1[rf.state], rf.me, "Term", rf.currentTerm, "和它发出的args CANDIDATE", requestVoteArgs.CandidateId, "Term", requestVoteArgs.Term)
 
 	requestVoteArgs.LastLogIndex = rf.lastLogIndex()
-	//log.Println(rf.m1[rf.state], rf.me, "requestVoteArgs.LastLogIndex = "+strconv.Itoa(requestVoteArgs.LastLogIndex))
+	////log.Println(rf.m1[rf.state], rf.me, "requestVoteArgs.LastLogIndex = "+strconv.Itoa(requestVoteArgs.LastLogIndex))
 	requestVoteArgs.LastLogTerm = rf.log[requestVoteArgs.LastLogIndex].Term
 
 	//rf.mu.Unlock()
 
 	for server := range rf.peers {
 		if server != rf.me {
-			//log.Println(rf.m1[rf.state], rf.me, "Term", rf.currentTerm, "准备向", "server", server, "sendRequestVote")
+			////log.Println(rf.m1[rf.state], rf.me, "Term", rf.currentTerm, "准备向", "server", server, "sendRequestVote")
 			go func(server int) { //另起一个线程来sendRequestVote
-				//log.Println("new thread to sendRequestVote")
+				////log.Println("new thread to sendRequestVote")
 				var requestVoteReply RequestVoteReply
 
 				ok := rf.sendRequestVote(server, requestVoteArgs, &requestVoteReply)
@@ -557,10 +561,10 @@ func (rf *Raft) elect() {
 				rf.mu.Lock()
 				defer rf.mu.Unlock() ///todo 这个锁好像会造成死锁
 				if ok {
-					//log.Println(rf.m1[rf.state], rf.me, "sendRequestVote success")
+					////log.Println(rf.m1[rf.state], rf.me, "sendRequestVote Success")
 					//如果发现自己的Term小，则退回follower
 					if rf.currentTerm < requestVoteReply.Term {
-						//log.Println(rf.m1[rf.state], rf.me, "Term", rf.currentTerm, "reply Term", reply.Term, "所以退回follower")
+						////log.Println(rf.m1[rf.state], rf.me, "Term", rf.currentTerm, "reply Term", reply.Term, "所以退回follower")
 						rf.currentTerm = requestVoteReply.Term
 						if rf.state != FLLOWER {
 							rf.changeStateTo(FLLOWER) ///todo
@@ -569,11 +573,11 @@ func (rf *Raft) elect() {
 					}
 					//如果仍是candadite身份并且获得投票
 					if rf.state == CANDIDATE && requestVoteReply.VoteGranted {
-						//log.Println(rf.m1[rf.state], rf.me, "voteGranted true")
+						////log.Println(rf.m1[rf.state], rf.me, "voteGranted true")
 						//log.Print("voteGranted true")
 						rf.voteCount++
 						if rf.voteCount > len(rf.peers)/2 { //如果获得多数票则当选
-							//log.Println(rf.m1[rf.state], rf.me, "become LEADER")
+							////log.Println(rf.m1[rf.state], rf.me, "become LEADER")
 							//log.Print("become leader: " + strconv.Itoa(rf.me))
 							rf.changeStateTo(LEADER) // 身份变为leader
 							//rf.heartbeat()
@@ -581,7 +585,7 @@ func (rf *Raft) elect() {
 							////log.Print("become leader: ", rf.me)
 						}
 					} else {
-						//log.Println(rf.m1[rf.state], rf.me, "voteGranted false")
+						////log.Println(rf.m1[rf.state], rf.me, "voteGranted false")
 						//log.Print("voteGranted false")
 					}
 				} else {
@@ -594,22 +598,22 @@ func (rf *Raft) elect() {
 
 // 心跳
 func (rf *Raft) heartbeat() {
-	log.Println(rf.m1[rf.state], rf.me, "开始发送心跳...")
-	//log.Println(rf.m1[rf.state], rf.me, "rf.nextIndex", rf.nextIndex)
+	//log.Println(rf.m1[rf.state], rf.me, "开始发送心跳...")
+	////log.Println(rf.m1[rf.state], rf.me, "rf.nextIndex", rf.nextIndex)
 	//rf.mu.Lock()
 	//me := rf.me
 	//defer rf.mu.Unlock()
 	for server := range rf.peers {
 		if server != rf.me {
 			go func(server int) {
-				//log.Println("@@@ ", rf.m1[rf.state], rf.me, "向", "server", server, "发送心跳")
+				////log.Println("@@@ ", rf.m1[rf.state], rf.me, "向", "server", server, "发送心跳")
 				///todo if rf.state!=LEADER
 				rf.mu.Lock()
 				appendEntriesArgs := AppendEntriesArgs{}
 				appendEntriesArgs.Term = rf.currentTerm
 				appendEntriesArgs.LeaderID = rf.me
 				appendEntriesArgs.PrevLogIndex = rf.nextIndex[server] - 1 ///
-				//log.Println("@@@ appendEntriesArgs.PrevLogIndex", appendEntriesArgs.PrevLogIndex)
+				////log.Println("@@@ appendEntriesArgs.PrevLogIndex", appendEntriesArgs.PrevLogIndex)
 				appendEntriesArgs.PrevLogTerm = rf.log[appendEntriesArgs.PrevLogIndex].Term
 				appendEntriesArgs.Entries = make([]LogEntry, 0) ///heartbeat的条目为空///todo
 				appendEntriesArgs.LeaderCommit = rf.commitIndex
@@ -617,12 +621,19 @@ func (rf *Raft) heartbeat() {
 				var appendEntriesReply AppendEntriesReply
 
 				ok := rf.sendAppendEntries(server, appendEntriesArgs, &appendEntriesReply)
-
+				rf.mu.Lock()
+				defer rf.mu.Unlock()
 				if ok {
-					//log.Print("sendAppendEntries success")
-					if appendEntriesReply.success {
+					//log.Print("sendAppendEntries Success")
+					if appendEntriesReply.Success {
 						//log.Print("appendEntriesReply true")
 						/// todo
+						if rf.currentTerm < appendEntriesReply.Term {
+							rf.currentTerm = appendEntriesReply.Term
+							rf.changeStateTo(FLLOWER)
+						} else {
+							/// TODO
+						}
 
 					} else {
 						//log.Print("appendEntriesReply false")
@@ -632,9 +643,9 @@ func (rf *Raft) heartbeat() {
 							//将leader的Term改为对方的Term
 							rf.currentTerm = appendEntriesReply.Term
 							//身份退回follower
-							rf.mu.Lock()
+							//rf.mu.Lock()
 							rf.changeStateTo(FLLOWER)
-							rf.mu.Unlock()
+							//rf.mu.Unlock()
 						} else {
 							//log.Print("rf.currentTerm >= appendEntriesReply.Term")
 							/// TODO
@@ -653,10 +664,10 @@ func (rf *Raft) heartbeat() {
 func (rf *Raft) changeStateTo(newState int) {
 	//rf.mu.Lock() ///todo 这个锁放在这里不一定合适，可能放在外面比较好
 	//defer rf.mu.Unlock()
-	log.Println("**********", rf.m1[rf.state], rf.me, "from", rf.m1[rf.state], "change to", rf.m1[newState], "**********")
+	//log.Println("**********", rf.m1[rf.state], rf.me, "from", rf.m1[rf.state], "change to", rf.m1[newState], "**********")
 	switch newState {
 	case FLLOWER:
-		log.Println(rf.m1[rf.state], rf.me, "term", rf.currentTerm, "身份变为【FLLOWER】")
+		//log.Println(rf.m1[rf.state], rf.me, "term", rf.currentTerm, "身份变为【FLLOWER】")
 		rf.state = FLLOWER
 		//变成follower之后heartbeatTimeout停止
 		rf.heartbeatTimeout.Stop()
@@ -664,16 +675,16 @@ func (rf *Raft) changeStateTo(newState int) {
 		rf.voteCount = 0 // 票数归零///todo 好像不需要
 		rf.electionTimeout.Reset(time.Duration(rand.Intn(151)+150) * time.Millisecond)
 	case CANDIDATE:
-		log.Println(rf.m1[rf.state], rf.me, "term", rf.currentTerm, "身份变为【CANDIDATE】")
+		//log.Println(rf.m1[rf.state], rf.me, "term", rf.currentTerm, "身份变为【CANDIDATE】")
 		rf.state = CANDIDATE
 		//把electionTimeout重置
 		rf.electionTimeout.Reset(time.Duration(rand.Intn(151)+150) * time.Millisecond)
 		//成为candidate之后立刻发起选举
 		go rf.elect()
 	case LEADER:
-		//log.Println(rf.m1[rf.state], rf.me, "rf.nextIndex", rf.nextIndex)
-		//log.Println(rf.m1[rf.state], rf.me, "rf.log", rf.log)
-		log.Println(rf.m1[rf.state], rf.me, "term", rf.currentTerm, "身份变为【LEADER】")
+		////log.Println(rf.m1[rf.state], rf.me, "rf.nextIndex", rf.nextIndex)
+		////log.Println(rf.m1[rf.state], rf.me, "rf.log", rf.log)
+		//log.Println(rf.m1[rf.state], rf.me, "term", rf.currentTerm, "身份变为【LEADER】")
 		rf.state = LEADER
 		//变成leader之后electionTimeout停止
 		rf.electionTimeout.Stop()
@@ -688,7 +699,7 @@ func (rf *Raft) changeStateTo(newState int) {
 		rf.heartbeat()
 		//发出心跳之后把heartbeatTimeout重置
 		rf.heartbeatTimeout.Reset(100 * time.Millisecond)
-		//log.Println(rf.m1[rf.state], rf.me, "rf.nextIndex", rf.nextIndex)
+		////log.Println(rf.m1[rf.state], rf.me, "rf.nextIndex", rf.nextIndex)
 		rf.voteCount = 0 // 票数归零///todo 好像不需要
 	default:
 		//log.Print("raft->身份切换错误！")
