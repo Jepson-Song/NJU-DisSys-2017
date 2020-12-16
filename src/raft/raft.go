@@ -619,7 +619,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			//发起选举
 			rf.mu.Lock()
 			if rf.state == CANDIDATE {
-				rf.startElection()
+				rf.elect()
+			} else {
+				//不是CANDIDATE
 			}
 			rf.mu.Unlock()
 		}
@@ -638,87 +640,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			//发送心跳
 			rf.mu.Lock()
 			if rf.state == LEADER {
-				//currentTerm := rf.currentTerm
-				for server := range rf.peers {
-					go func(server int) {
-						// decrease rf.nextIndex[index] in loop till append success
-						for {
-							if server == rf.me || rf.state != LEADER {
-								break
-							}
-							// if rf.nextIndex[index] <= 0 || rf.nextIndex[index] > len(rf.log){
-							//   log.Printf("Error: rf.nextIndex[%d] = %d, logLen = %d", index, rf.nextIndex[index], len(rf.log))
-							// }
-							rf.mu.Lock()
-							//logLen := len(rf.log)
-							//appendEntries := rf.log[rf.nextIndex[server]:]
-							//prevIndex := rf.nextIndex[server] - 1
-							/*appendEntriesArgs := AppendEntriesArgs{currentTerm, rf.me,
-							prevIndex, rf.log[prevIndex].Term,
-							appendEntries, rf.commitIndex}*/
-							var appendEntriesArgs AppendEntriesArgs
-							appendEntriesArgs.Term = rf.currentTerm
-							appendEntriesArgs.LeaderID = rf.me
-							appendEntriesArgs.PrevLogIndex = rf.nextIndex[server] - 1
-							appendEntriesArgs.PrevLogTerm = rf.log[appendEntriesArgs.PrevLogIndex].Term
-							appendEntriesArgs.Entries = rf.log[rf.nextIndex[server]:]
-							appendEntriesArgs.LeaderCommit = rf.commitIndex
-							rf.mu.Unlock()
-
-							var appendEntriesReply AppendEntriesReply
-							ok := rf.sendAppendEntries(server, appendEntriesArgs, &appendEntriesReply)
-
-							rf.mu.Lock()
-							if ok && rf.currentTerm == appendEntriesArgs.Term { // ensure the reply is not outdated
-								if appendEntriesReply.Success {
-									rf.matchIndex[server] = rf.lastLogIndex()
-									rf.nextIndex[server] = rf.lastLogIndex() + 1
-
-									rf.mu.Unlock()
-									break
-								} else {
-									if appendEntriesReply.Term > rf.currentTerm { // this leader node is outdated
-										rf.currentTerm = appendEntriesReply.Term
-										//rf.state = FLLOWER
-										rf.changeStateTo(FLLOWER)
-										rf.persist()
-										rf.mu.Unlock()
-										break
-									} else { // prevIndex not match, decrease prevIndex
-										// rf.nextIndex[index]--
-										// if appendEntriesReply.ConflictIndex<= 0 || appendEntriesReply.ConflictIndex>= logLen{
-										//   log.Printf("Error: appendEntriesReply.ConflictIndexfrom %d = %d, logLen = %d", appendEntriesReply.ConflictFromIndex, index, logLen)
-										// }
-										rf.nextIndex[server] = appendEntriesReply.ConflictIndex
-									}
-								}
-							}
-							rf.mu.Unlock()
-						}
-					}(server)
-				}
-
-				// Find logs that has appended to majority and update commitIndex
-				for N := rf.commitIndex + 1; N < len(rf.log); N++ {
-					// To eliminate problems like the one in Figure 8,
-					//  Raft never commits log entries from previous terms by count- ing replicas.
-					if rf.log[N].Term < rf.currentTerm {
-						continue
-					} else if rf.log[N].Term > rf.currentTerm {
-						break
-					}
-					followerHas := 0
-					for index := range rf.peers {
-						if rf.matchIndex[index] >= N {
-							followerHas++
-						}
-					}
-					// If majority has the log entry of index N
-					if followerHas > len(rf.peers)/2 {
-						log.Printf("set commitIndex to %d, matchIndex = %v", N, rf.matchIndex)
-						rf.commitIndex = N
-					}
-				}
+				rf.heartbeat()
 			} else {
 				//不是LEADER
 			}
@@ -729,7 +651,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 }
 
 //选举函数
-func (rf *Raft) startElection() {
+func (rf *Raft) elect() {
 	//log.Println(rf.m1[rf.state], rf.me, "开始选举...")
 	//rf.mu.Lock()       ///TODO 这个锁应该加在哪里？
 	//rf.mu.Unlock()
@@ -751,7 +673,7 @@ func (rf *Raft) startElection() {
 			//向sever发送请求投票的rpc
 			ok := rf.sendRequestVote(server, requestVoteArgs, &requestVoteReply)
 
-			if ok { //call成功
+			if ok { //Call"Raft.RequestVote"成功
 				//加锁
 				rf.mu.Lock()
 				//如果回复的term更大，则更新自己的term并退回follower
@@ -768,8 +690,8 @@ func (rf *Raft) startElection() {
 						if rf.voteCount > len(rf.peers)/2 && rf.state != LEADER {
 							//rf.state = LEADER
 							rf.changeStateTo(LEADER)
-							rf.currentTerm = requestVoteArgs.Term //这里很关键，不能用自己的任期自增
 							//当选后任期才增加
+							rf.currentTerm = requestVoteArgs.Term //这里很关键，不能用自己的任期自增
 							//rf.currentTerm++
 							rf.nextIndex = make([]int, len(rf.peers))
 							rf.matchIndex = make([]int, len(rf.peers))
@@ -791,11 +713,101 @@ func (rf *Raft) startElection() {
 					log.Printf("requestVoteArgs.Term < rf.currentTerm")
 				}
 				rf.mu.Unlock()
-			} else { //call失败
-				//log.Printf("Call失败")
+			} else { //Call"Raft.RequestVote" 失败
+				//log.Printf("Call"Raft.RequestVote"失败")
 			}
 
 		}(server)
+	}
+}
+
+// 心跳函数
+func (rf *Raft) heartbeat() {
+
+	//log.Println(rf.m1[rf.state], rf.me, "开始发送心跳...")
+	////log.Println(rf.m1[rf.state], rf.me, "rf.nextIndex", rf.nextIndex)
+	//rf.mu.Lock()
+	//me := rf.me
+	//defer rf.mu.Unlock()
+
+	//currentTerm := rf.currentTerm
+	for server := range rf.peers {
+		go func(server int) {
+			// decrease rf.nextIndex[index] in loop till append success
+			for {
+				if server == rf.me || rf.state != LEADER {
+					break
+				}
+				// if rf.nextIndex[index] <= 0 || rf.nextIndex[index] > len(rf.log){
+				//   log.Printf("Error: rf.nextIndex[%d] = %d, logLen = %d", index, rf.nextIndex[index], len(rf.log))
+				// }
+				rf.mu.Lock()
+				var appendEntriesArgs AppendEntriesArgs
+				appendEntriesArgs.Term = rf.currentTerm
+				appendEntriesArgs.LeaderID = rf.me
+				appendEntriesArgs.PrevLogIndex = rf.nextIndex[server] - 1
+				appendEntriesArgs.PrevLogTerm = rf.log[appendEntriesArgs.PrevLogIndex].Term
+				appendEntriesArgs.Entries = rf.log[rf.nextIndex[server]:]
+				appendEntriesArgs.LeaderCommit = rf.commitIndex
+				rf.mu.Unlock()
+
+				var appendEntriesReply AppendEntriesReply
+				ok := rf.sendAppendEntries(server, appendEntriesArgs, &appendEntriesReply)
+
+				rf.mu.Lock()
+				if ok { //Call"Raft.AppendEntries" 成功
+					//if rf.currentTerm == appendEntriesArgs.Term { // 好像不需要ensure the reply is not outdated
+					if appendEntriesReply.Term > rf.currentTerm { // this leader node is outdated
+						rf.currentTerm = appendEntriesReply.Term
+						//rf.state = FLLOWER
+						rf.changeStateTo(FLLOWER)
+						rf.persist()
+						rf.mu.Unlock()
+						break
+					} else {
+						if appendEntriesReply.Success {
+							rf.matchIndex[server] = rf.lastLogIndex()
+							rf.nextIndex[server] = rf.lastLogIndex() + 1
+
+							rf.mu.Unlock()
+							break
+						} else { // prevIndex not match, decrease prevIndex
+							// rf.nextIndex[index]--
+							// if appendEntriesReply.ConflictIndex<= 0 || appendEntriesReply.ConflictIndex>= logLen{
+							//   log.Printf("Error: appendEntriesReply.ConflictIndexfrom %d = %d, logLen = %d", appendEntriesReply.ConflictFromIndex, index, logLen)
+							// }
+							rf.nextIndex[server] = appendEntriesReply.ConflictIndex
+						}
+					}
+
+				} else {
+					//Call"Raft.AppendEntries" 失败
+				}
+				rf.mu.Unlock()
+			}
+		}(server)
+	}
+
+	// Find logs that has appended to majority and update commitIndex
+	for N := rf.commitIndex + 1; N < len(rf.log); N++ {
+		// To eliminate problems like the one in Figure 8,
+		//  Raft never commits log entries from previous terms by count- ing replicas.
+		if rf.log[N].Term < rf.currentTerm {
+			continue
+		} else if rf.log[N].Term > rf.currentTerm {
+			break
+		}
+		followerHas := 0
+		for index := range rf.peers {
+			if rf.matchIndex[index] >= N {
+				followerHas++
+			}
+		}
+		// If majority has the log entry of index N
+		if followerHas > len(rf.peers)/2 {
+			log.Printf("set commitIndex to %d, matchIndex = %v", N, rf.matchIndex)
+			rf.commitIndex = N
+		}
 	}
 }
 
@@ -852,70 +864,6 @@ func (rf *Raft) stateMachine() {
 	}
 }
 */
-// 心跳
-func (rf *Raft) heartbeat() {
-	//log.Println(rf.m1[rf.state], rf.me, "开始发送心跳...")
-	////log.Println(rf.m1[rf.state], rf.me, "rf.nextIndex", rf.nextIndex)
-	//rf.mu.Lock()
-	//me := rf.me
-	//defer rf.mu.Unlock()
-	for server := range rf.peers {
-		if server != rf.me {
-			go func(server int) {
-				////log.Println("@@@ ", rf.m1[rf.state], rf.me, "向", "server", server, "发送心跳")
-				///todo if rf.state!=LEADER
-				rf.mu.Lock()
-				appendEntriesArgs := AppendEntriesArgs{}
-				appendEntriesArgs.Term = rf.currentTerm
-				appendEntriesArgs.LeaderID = rf.me
-				appendEntriesArgs.PrevLogIndex = rf.nextIndex[server] - 1 ///
-				////log.Println("@@@ appendEntriesArgs.PrevLogIndex", appendEntriesArgs.PrevLogIndex)
-				appendEntriesArgs.PrevLogTerm = rf.log[appendEntriesArgs.PrevLogIndex].Term
-				appendEntriesArgs.Entries = make([]LogEntry, 0) ///heartbeat的条目为空///todo
-				appendEntriesArgs.LeaderCommit = rf.commitIndex
-				rf.mu.Unlock()
-				var appendEntriesReply AppendEntriesReply
-
-				ok := rf.sendAppendEntries(server, appendEntriesArgs, &appendEntriesReply)
-				rf.mu.Lock()
-				defer rf.mu.Unlock()
-				if ok {
-					//log.Print("sendAppendEntries Success")
-					if appendEntriesReply.Success {
-						//log.Print("appendEntriesReply true")
-						/// todo
-						if rf.currentTerm < appendEntriesReply.Term {
-							rf.currentTerm = appendEntriesReply.Term
-							rf.changeStateTo(FLLOWER)
-						} else {
-							/// TODO
-						}
-
-					} else {
-						//log.Print("appendEntriesReply false")
-						// 如果leader的Term比对方的小
-						if rf.currentTerm < appendEntriesReply.Term {
-							//log.Print("rf.currentTerm < appendEntriesReply.Term")
-							//将leader的Term改为对方的Term
-							rf.currentTerm = appendEntriesReply.Term
-							//身份退回follower
-							//rf.mu.Lock()
-							rf.changeStateTo(FLLOWER)
-							//rf.mu.Unlock()
-						} else {
-							//log.Print("rf.currentTerm >= appendEntriesReply.Term")
-							/// TODO
-						}
-					}
-
-				} else {
-					//log.Print("sendAppendEntries fail")
-				}
-			}(server)
-		}
-	}
-	rf.heartbeatTimeout.Reset(100 * time.Millisecond) //heartbeatTimeout开始///?
-}
 
 /*
 func (rf *Raft) changeStateTo(newState int) {
