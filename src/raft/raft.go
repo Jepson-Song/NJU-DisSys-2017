@@ -631,10 +631,18 @@ func (rf *Raft) elect() {
 
 	for server := range rf.peers {
 		go func(server int) {
+
+			// 身份突然不是CANDIDATE则退出选举
+			if rf.state != CANDIDATE {
+				log.Printf("身份突然不是CANDIDATE了，退出选举")
+				return
+			}
+
 			var requestVoteReply RequestVoteReply
 			//向sever发送请求投票的rpc
 			ok := rf.sendRequestVote(server, requestVoteArgs, &requestVoteReply)
 
+			//判断Call"Raft.RequestVote"是否成功
 			if ok { //Call"Raft.RequestVote"成功
 				//加锁
 				rf.mu.Lock()
@@ -649,7 +657,7 @@ func (rf *Raft) elect() {
 						//如果回复的term相等并且同意投票
 						//投票计数器增加一票
 						rf.voteCount++
-						if rf.voteCount > len(rf.peers)/2 && rf.state != LEADER {
+						if rf.isMajority(rf.voteCount) { //&& rf.state != LEADER {
 							//rf.state = LEADER
 							rf.changeStateTo(LEADER)
 							//当选后任期才增加
@@ -691,18 +699,20 @@ func (rf *Raft) heartbeat() {
 	//rf.mu.Lock()
 	//me := rf.me
 	//defer rf.mu.Unlock()
-
-	//currentTerm := rf.currentTerm
 	for server := range rf.peers {
 		go func(server int) {
-			// decrease rf.nextIndex[index] in loop till append success
-			for {
-				if server == rf.me || rf.state != LEADER {
+			for { //for循环不断重复发送，直到success才break
+				//LEADER不需要给自己发送心跳
+				if server == rf.me {
 					break
 				}
-				// if rf.nextIndex[index] <= 0 || rf.nextIndex[index] > len(rf.log){
-				//   log.Printf("Error: rf.nextIndex[%d] = %d, logLen = %d", index, rf.nextIndex[index], len(rf.log))
-				// }
+
+				// 如果身份不是LEADER了就退出
+				if rf.state != LEADER {
+					log.Printf("身份突然不是LEADER了")
+					return //这里return和break作用好像是相同的
+				}
+
 				rf.mu.Lock()
 				var appendEntriesArgs AppendEntriesArgs
 				appendEntriesArgs.Term = rf.currentTerm
@@ -714,31 +724,31 @@ func (rf *Raft) heartbeat() {
 				rf.mu.Unlock()
 
 				var appendEntriesReply AppendEntriesReply
+				//向sever发送心跳rpc
 				ok := rf.sendAppendEntries(server, appendEntriesArgs, &appendEntriesReply)
 
+				//判断//Call"Raft.AppendEntries"是否成功
 				rf.mu.Lock()
 				if ok { //Call"Raft.AppendEntries" 成功
 					//if rf.currentTerm == appendEntriesArgs.Term { // 好像不需要ensure the reply is not outdated
-					if appendEntriesReply.Term > rf.currentTerm { // this leader node is outdated
+					if appendEntriesReply.Term > rf.currentTerm { // LEADER过时
 						rf.currentTerm = appendEntriesReply.Term
 						//rf.state = FLLOWER
 						rf.changeStateTo(FLLOWER)
+						//持久化
 						rf.persist()
 						rf.mu.Unlock()
-						break
-					} else {
-						if appendEntriesReply.Success {
+						return //LEADER过时后直接退出，不再继续发送心跳
+					} else { //LEADER没有过时
+						if appendEntriesReply.Success { //match成功，则更新rf里对于该server的matchIndex和nextIndex
 							rf.matchIndex[server] = rf.lastLogIndex()
 							rf.nextIndex[server] = rf.lastLogIndex() + 1
 
 							rf.mu.Unlock()
-							break
-						} else { // prevIndex not match, decrease prevIndex
-							// rf.nextIndex[index]--
-							// if appendEntriesReply.ConflictIndex<= 0 || appendEntriesReply.ConflictIndex>= logLen{
-							//   log.Printf("Error: appendEntriesReply.ConflictIndexfrom %d = %d, logLen = %d", appendEntriesReply.ConflictFromIndex, index, logLen)
-							// }
+							break //success后跳出循环，不再继续发送心跳
+						} else { // 没有match上，则修正rf.nextIndex
 							rf.nextIndex[server] = appendEntriesReply.ConflictIndex
+							//没success则继续循环，重新发送心跳
 						}
 					}
 
@@ -749,28 +759,48 @@ func (rf *Raft) heartbeat() {
 			}
 		}(server)
 	}
+	//更新LEADER的commitIndex
+	rf.updateCommitIndex()
+}
 
+//判断是不是majority（是否超过server数量的一一半）
+func (rf *Raft) isMajority(count int) bool {
+	if count > len(rf.peers)/2 {
+		return true
+	} else {
+		return false
+	}
+}
+
+//更新LEADER的commitIndex的函数
+func (rf *Raft) updateCommitIndex() {
 	// Find logs that has appended to majority and update commitIndex
-	for N := rf.commitIndex + 1; N < len(rf.log); N++ {
+	for index := rf.commitIndex + 1; index < len(rf.log); index++ {
 		// To eliminate problems like the one in Figure 8,
 		//  Raft never commits log entries from previous terms by count- ing replicas.
-		if rf.log[N].Term < rf.currentTerm {
+		if rf.log[index].Term < rf.currentTerm {
 			continue
-		} else if rf.log[N].Term > rf.currentTerm {
+		} else if rf.log[index].Term > rf.currentTerm {
 			break
 		}
-		followerHas := 0
-		for index := range rf.peers {
-			if rf.matchIndex[index] >= N {
-				followerHas++
+
+		//统计有多少个server拥有该index的log
+		commitCounter := 0
+		for server := range rf.peers {
+			if rf.matchIndex[server] >= index {
+				commitCounter++
 			}
 		}
-		// If majority has the log entry of index N
-		if followerHas > len(rf.peers)/2 {
-			log.Printf("set commitIndex to %d, matchIndex = %v", N, rf.matchIndex)
-			rf.commitIndex = N
+		// 如果超过一半的server都有该index的log，则更新LEADER的commitIndex
+		if rf.isMajority(commitCounter) {
+			log.Printf("set commitIndex to %d, matchIndex = %v", index, rf.matchIndex)
+			rf.commitIndex = index
 		}
 	}
+}
+
+func (rf *Raft) changeStateTo(newState int) {
+	rf.state = newState
 }
 
 /*
@@ -872,7 +902,3 @@ func (rf *Raft) changeStateTo(newState int) {
 		//log.Print("raft->身份切换错误！")
 	}
 }*/
-
-func (rf *Raft) changeStateTo(newState int) {
-	rf.state = newState
-}
