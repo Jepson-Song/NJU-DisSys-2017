@@ -595,7 +595,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	//Random(-electionRandomFactor, electionRandomFactor))
 	time.Sleep(duration * time.Millisecond)
 	*/
-	// candidate thread
+	// CANDIDATE
 	go func() {
 		//var counterLock sync.Mutex ///删掉之后backup有可能过不了
 		for {
@@ -616,8 +616,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			//Random(-electionRandomFactor, electionRandomFactor))
 			time.Sleep(duration * time.Millisecond)
 
+			//发起选举
 			rf.mu.Lock()
-
 			if rf.state == CANDIDATE {
 				rf.startElection()
 			}
@@ -625,48 +625,60 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		}
 	}()
 
-	// leader thread
+	// LEADER
 	go func() {
 		for {
 			/*if rf.isKilled {
 				return
 			}*/
+
+			//等待一段时间之后发送心跳
 			time.Sleep(heartbeatTimeout * time.Millisecond)
+
+			//发送心跳
 			rf.mu.Lock()
-			// send AppendEntries(as heartbeats) RPC
 			if rf.state == LEADER {
-				currentTerm := rf.currentTerm
-				for index := range rf.peers {
-					go func(index int) {
+				//currentTerm := rf.currentTerm
+				for server := range rf.peers {
+					go func(server int) {
 						// decrease rf.nextIndex[index] in loop till append success
 						for {
-							if index == rf.me || rf.state != LEADER {
+							if server == rf.me || rf.state != LEADER {
 								break
 							}
 							// if rf.nextIndex[index] <= 0 || rf.nextIndex[index] > len(rf.log){
 							//   log.Printf("Error: rf.nextIndex[%d] = %d, logLen = %d", index, rf.nextIndex[index], len(rf.log))
 							// }
 							rf.mu.Lock()
-							logLen := len(rf.log)
-							appendEntries := rf.log[rf.nextIndex[index]:]
-							prevIndex := rf.nextIndex[index] - 1
-							aeArgs := AppendEntriesArgs{currentTerm, rf.me,
-								prevIndex, rf.log[prevIndex].Term,
-								appendEntries, rf.commitIndex}
-							aeReply := AppendEntriesReply{}
+							//logLen := len(rf.log)
+							//appendEntries := rf.log[rf.nextIndex[server]:]
+							//prevIndex := rf.nextIndex[server] - 1
+							/*appendEntriesArgs := AppendEntriesArgs{currentTerm, rf.me,
+							prevIndex, rf.log[prevIndex].Term,
+							appendEntries, rf.commitIndex}*/
+							var appendEntriesArgs AppendEntriesArgs
+							appendEntriesArgs.Term = rf.currentTerm
+							appendEntriesArgs.LeaderID = rf.me
+							appendEntriesArgs.PrevLogIndex = rf.nextIndex[server] - 1
+							appendEntriesArgs.PrevLogTerm = rf.log[appendEntriesArgs.PrevLogIndex].Term
+							appendEntriesArgs.Entries = rf.log[rf.nextIndex[server]:]
+							appendEntriesArgs.LeaderCommit = rf.commitIndex
 							rf.mu.Unlock()
 
-							ok := rf.sendAppendEntries(index, aeArgs, &aeReply)
+							var appendEntriesReply AppendEntriesReply
+							ok := rf.sendAppendEntries(server, appendEntriesArgs, &appendEntriesReply)
+
 							rf.mu.Lock()
-							if ok && rf.currentTerm == aeArgs.Term { // ensure the reply is not outdated
-								if aeReply.Success {
-									rf.matchIndex[index] = logLen - 1
-									rf.nextIndex[index] = logLen
+							if ok && rf.currentTerm == appendEntriesArgs.Term { // ensure the reply is not outdated
+								if appendEntriesReply.Success {
+									rf.matchIndex[server] = rf.lastLogIndex()
+									rf.nextIndex[server] = rf.lastLogIndex() + 1
+
 									rf.mu.Unlock()
 									break
 								} else {
-									if aeReply.Term > rf.currentTerm { // this leader node is outdated
-										rf.currentTerm = aeReply.Term
+									if appendEntriesReply.Term > rf.currentTerm { // this leader node is outdated
+										rf.currentTerm = appendEntriesReply.Term
 										//rf.state = FLLOWER
 										rf.changeStateTo(FLLOWER)
 										rf.persist()
@@ -674,16 +686,16 @@ func Make(peers []*labrpc.ClientEnd, me int,
 										break
 									} else { // prevIndex not match, decrease prevIndex
 										// rf.nextIndex[index]--
-										// if aeReply.ConflictIndex<= 0 || aeReply.ConflictIndex>= logLen{
-										//   log.Printf("Error: aeReply.ConflictIndexfrom %d = %d, logLen = %d", aeReply.ConflictFromIndex, index, logLen)
+										// if appendEntriesReply.ConflictIndex<= 0 || appendEntriesReply.ConflictIndex>= logLen{
+										//   log.Printf("Error: appendEntriesReply.ConflictIndexfrom %d = %d, logLen = %d", appendEntriesReply.ConflictFromIndex, index, logLen)
 										// }
-										rf.nextIndex[index] = aeReply.ConflictIndex
+										rf.nextIndex[server] = appendEntriesReply.ConflictIndex
 									}
 								}
 							}
 							rf.mu.Unlock()
 						}
-					}(index)
+					}(server)
 				}
 
 				// Find logs that has appended to majority and update commitIndex
@@ -707,6 +719,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 						rf.commitIndex = N
 					}
 				}
+			} else {
+				//不是LEADER
 			}
 			rf.mu.Unlock()
 		}
@@ -714,14 +728,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	return rf ///
 }
 
+//选举函数
 func (rf *Raft) startElection() {
 	//log.Println(rf.m1[rf.state], rf.me, "开始选举...")
 	//rf.mu.Lock()       ///TODO 这个锁应该加在哪里？
 	//rf.mu.Unlock()
 	log.Printf("start to request votes for term %d", rf.currentTerm+1)
 	//选举开始时将rf得到的选票置位0
-	rf.votedFor = rf.me //投票给自己
-	rf.voteCount = 0    ///TODO 自己的票算不算？
+	//rf.votedFor = rf.me //投票给自己//下面的for循环已经包括了自己
+	rf.voteCount = 0 ///TODO 自己的票算不算？
 
 	var requestVoteArgs RequestVoteArgs
 	requestVoteArgs.Term = rf.currentTerm + 1
@@ -784,6 +799,7 @@ func (rf *Raft) startElection() {
 	}
 }
 
+/*
 func (rf *Raft) stateMachine() {
 	for {
 		switch rf.state { ///todo 这里应该也要加锁？
@@ -835,78 +851,7 @@ func (rf *Raft) stateMachine() {
 		}
 	}
 }
-
-// 选举
-func (rf *Raft) elect() {
-	//log.Println(rf.m1[rf.state], rf.me, "开始选举...")
-	//requestVoteArgs := &RequestVoteArgs{0, 0, 0, 0}
-	//rf.mu.Lock()
-	//rf.mu.Lock()       ///TODO 这个锁应该加在哪里？
-	rf.currentTerm++    //Term++
-	rf.votedFor = rf.me //投票给自己
-	rf.voteCount = 0    ///TODO 自己的票算不算？
-	//rf.mu.Unlock()
-
-	var requestVoteArgs RequestVoteArgs
-	//requestVoteArgs := RequestVoteArgs{}
-	requestVoteArgs.Term = rf.currentTerm
-	//requestVoteArgs.from = rf.me
-	requestVoteArgs.CandidateId = rf.me
-	////log.Println(rf.m1[rf.state], rf.me, "Term", rf.currentTerm, "和它发出的args CANDIDATE", requestVoteArgs.CandidateId, "Term", requestVoteArgs.Term)
-
-	requestVoteArgs.LastLogIndex = rf.lastLogIndex()
-	////log.Println(rf.m1[rf.state], rf.me, "requestVoteArgs.LastLogIndex = "+strconv.Itoa(requestVoteArgs.LastLogIndex))
-	requestVoteArgs.LastLogTerm = rf.log[requestVoteArgs.LastLogIndex].Term
-
-	//rf.mu.Unlock()
-
-	for server := range rf.peers {
-		if server != rf.me {
-			////log.Println(rf.m1[rf.state], rf.me, "Term", rf.currentTerm, "准备向", "server", server, "sendRequestVote")
-			go func(server int) { //另起一个线程来sendRequestVote
-				////log.Println("new thread to sendRequestVote")
-				var requestVoteReply RequestVoteReply
-
-				ok := rf.sendRequestVote(server, requestVoteArgs, &requestVoteReply)
-
-				rf.mu.Lock()
-				defer rf.mu.Unlock() ///todo 这个锁好像会造成死锁
-				if ok {
-					////log.Println(rf.m1[rf.state], rf.me, "sendRequestVote Success")
-					//如果发现自己的Term小，则退回follower
-					if rf.currentTerm < requestVoteReply.Term {
-						////log.Println(rf.m1[rf.state], rf.me, "Term", rf.currentTerm, "reply Term", reply.Term, "所以退回follower")
-						rf.currentTerm = requestVoteReply.Term
-						if rf.state != FLLOWER {
-							rf.changeStateTo(FLLOWER) ///todo
-						}
-						//persist
-					}
-					//如果仍是candadite身份并且获得投票
-					if rf.state == CANDIDATE && requestVoteReply.VoteGranted {
-						////log.Println(rf.m1[rf.state], rf.me, "voteGranted true")
-						//log.Print("voteGranted true")
-						rf.voteCount++
-						if rf.voteCount > len(rf.peers)/2 { //如果获得多数票则当选
-							////log.Println(rf.m1[rf.state], rf.me, "become LEADER")
-							//log.Print("become leader: " + strconv.Itoa(rf.me))
-							rf.changeStateTo(LEADER) // 身份变为leader
-							//rf.heartbeat()
-						} else {
-							////log.Print("become leader: ", rf.me)
-						}
-					} else {
-						////log.Println(rf.m1[rf.state], rf.me, "voteGranted false")
-						//log.Print("voteGranted false")
-					}
-				} else {
-					//log.Print("sendRequestVote fail")
-				}
-			}(server)
-		}
-	}
-}
-
+*/
 // 心跳
 func (rf *Raft) heartbeat() {
 	//log.Println(rf.m1[rf.state], rf.me, "开始发送心跳...")
