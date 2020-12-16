@@ -642,32 +642,42 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				for server := range rf.peers {
 					go func(server int) {
 						var requestVoteReply RequestVoteReply
+						//向sever发送请求投票的rpc
 						ok := rf.sendRequestVote(server, requestVoteArgs, &requestVoteReply)
-						rf.mu.Lock()
-						if requestVoteReply.Term > rf.currentTerm {
-							rf.currentTerm = requestVoteReply.Term
-							//rf.state = FLLOWER
-							rf.changeStateTo(FLLOWER)
-							rf.persist()
-						} else if ok && (requestVoteArgs.Term == rf.currentTerm) && requestVoteReply.VoteGranted {
-							counterLock.Lock()
-							counter++
-							if counter > len(rf.peers)/2 && rf.state != LEADER {
-								rf.state = LEADER
-								rf.currentTerm = requestTerm
-								rf.nextIndex = make([]int, len(rf.peers))
-								rf.matchIndex = make([]int, len(rf.peers))
-								// immediately send heartbeats to others to stop election
-								for i := range rf.peers {
-									rf.nextIndex[i] = len(rf.log)
-								}
-								rf.persist()
 
-								log.Printf("become leader for term %d, nextIndex = %v, requestVoteArgs = %v", rf.currentTerm, rf.nextIndex, requestVoteArgs)
+						if ok { //call成功
+							//加锁
+							rf.mu.Lock()
+							//如果回复的term更大，则更新自己的term并退回follower
+							if requestVoteReply.Term > rf.currentTerm {
+								rf.currentTerm = requestVoteReply.Term
+								rf.changeStateTo(FLLOWER)
+								//持久化
+								rf.persist()
+							} else if (requestVoteArgs.Term == rf.currentTerm) && requestVoteReply.VoteGranted {
+								//如果回复的term相等并且同意投票
+								counterLock.Lock()
+								counter++
+								if counter > len(rf.peers)/2 && rf.state != LEADER {
+									rf.state = LEADER
+									rf.currentTerm = requestTerm
+									rf.nextIndex = make([]int, len(rf.peers))
+									rf.matchIndex = make([]int, len(rf.peers))
+									// immediately send heartbeats to others to stop election
+									for i := range rf.peers {
+										rf.nextIndex[i] = len(rf.log)
+									}
+									rf.persist()
+
+									log.Printf("become leader for term %d, nextIndex = %v, requestVoteArgs = %v", rf.currentTerm, rf.nextIndex, requestVoteArgs)
+								}
+								counterLock.Unlock()
 							}
-							counterLock.Unlock()
+							rf.mu.Unlock()
+						} else { //call失败
+							//log.Printf("Call失败")
 						}
-						rf.mu.Unlock()
+
 					}(server)
 				}
 			}
