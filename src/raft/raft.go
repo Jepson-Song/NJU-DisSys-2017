@@ -258,31 +258,18 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 
 	rf.mu.Lock() ///todo
 	defer rf.mu.Unlock()
+	//不管是否vote，都要把reply的term设置为rf的term
+	reply.Term = rf.currentTerm
 
 	lastLogIndex := rf.lastLogIndex()
-	reply.Term = rf.currentTerm
 	isCandidateOutdated := compareLog(args.LastLogTerm,
 		args.LastLogIndex, rf.log[lastLogIndex].Term, lastLogIndex)
-	//如果Term比rpc的小，则更新Term并切换成follower身份
-	if rf.currentTerm <= args.Term && !isCandidateOutdated { ///?
-		////log.Println("<<< server", rf.me, "的Term比 CANDIDATE", args.CandidateId, "的Term小，投票")
-		rf.currentTerm = args.Term
-		reply.VoteGranted = true
-		//rf.votedFor = -1
-		rf.votedFor = args.CandidateId
-		//log.Println("<<< server", rf.me, "term", rf.currentTerm, "投票")
-		if rf.state != FLLOWER {
-			//log.Println("<<< server", rf.me, "退回FOLLOWER")
-			rf.changeStateTo(FLLOWER)
-		}
-		rf.persist() ///?
-		//if{}else{}
-		log.Printf("accept vote for Node %d(Term %d), %v",
-			args.CandidateId, args.Term, []int{args.LastLogTerm, args.LastLogIndex, rf.log[lastLogIndex].Term, lastLogIndex})
-	} else {
-		////log.Println("<<< server", rf.me, "的Term比 CANDIDATE", args.CandidateId, "的Term大，不投票")
+	//如果args的不是最新的
+	if (args.LastLogTerm < rf.log[lastLogIndex].Term) ||
+		(args.LastLogTerm == rf.log[lastLogIndex].Term && args.LastLogIndex < lastLogIndex) {
 		//log.Println("<<< server", rf.me, "term", rf.currentTerm, "不投票")
 		reply.VoteGranted = false
+		/*******可以删除***************/
 		reason := ""
 		if rf.currentTerm > args.Term {
 			reason = "RPC term is outdated"
@@ -290,7 +277,26 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 			reason = "Candidate's log is outdated"
 		}
 		log.Printf("refuse to vote for Node %d(Term %d), %s", args.CandidateId, args.Term, reason)
+		/**********************************/
+	} else { //如果args是最新的//如果Term比rpc的小，则更新Term并切换成follower身份
+		//更新rf的term
+		rf.currentTerm = args.Term
+		//向args投票
+		rf.votedFor = args.CandidateId
+		reply.VoteGranted = true
+		//如果不是follower则退回follower
+		//log.Println("<<< server", rf.me, "term", rf.currentTerm, "投票")
+		if rf.state != FLLOWER {
+			//log.Println("<<< server", rf.me, "退回FOLLOWER")
+			rf.changeStateTo(FLLOWER)
+		}
+		log.Printf("accept vote for Node %d(Term %d), %v",
+			args.CandidateId, args.Term, []int{args.LastLogTerm, args.LastLogIndex, rf.log[lastLogIndex].Term, lastLogIndex})
+
+		//是不是要持久化
+		rf.persist()
 	}
+
 }
 
 /*
