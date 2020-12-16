@@ -630,7 +630,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				requestTerm := rf.currentTerm + 1
 				lastTerm := rf.log[lastIndex].Term
 				requestVoteArgs := RequestVoteArgs{requestTerm, rf.me, lastTerm, lastIndex}
-				requestVoteReply := make([]RequestVoteReply, len(rf.peers))
+				//requestVoteReply := make([]RequestVoteReply, len(rf.peers))
 
 				/*var requestVoteArgs RequestVoteArgs
 				requestVoteArgs.Term = rf.currentTerm + 1
@@ -639,16 +639,17 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				requestVoteArgs.LastLogTerm = rf.log[lastLogIndex].Term
 				requestVoteArgs.LastLogIndex = lastLogIndex*/
 
-				for index := range rf.peers {
-					go func(index int) {
-						ok := rf.sendRequestVote(index, requestVoteArgs, &requestVoteReply[index])
+				for server := range rf.peers {
+					go func(server int) {
+						var requestVoteReply RequestVoteReply
+						ok := rf.sendRequestVote(server, requestVoteArgs, &requestVoteReply)
 						rf.mu.Lock()
-						if requestVoteReply[index].Term > rf.currentTerm {
-							rf.currentTerm = requestVoteReply[index].Term
+						if requestVoteReply.Term > rf.currentTerm {
+							rf.currentTerm = requestVoteReply.Term
 							//rf.state = FLLOWER
 							rf.changeStateTo(FLLOWER)
 							rf.persist()
-						} else if ok && (requestVoteArgs.Term == rf.currentTerm) && requestVoteReply[index].VoteGranted {
+						} else if ok && (requestVoteArgs.Term == rf.currentTerm) && requestVoteReply.VoteGranted {
 							counterLock.Lock()
 							counter++
 							if counter > len(rf.peers)/2 && rf.state != LEADER {
@@ -667,7 +668,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 							counterLock.Unlock()
 						}
 						rf.mu.Unlock()
-					}(index)
+					}(server)
 				}
 			}
 			rf.mu.Unlock()
