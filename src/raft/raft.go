@@ -201,8 +201,8 @@ type RequestVoteArgs struct {
 	// Your data here.
 	Term         int //candidate’s Term
 	CandidateId  int //candidate requesting vote
-	LastLogTerm  int //Term of candidate’s last log entry
 	LastLogIndex int //index of candidate’s last log entry
+	LastLogTerm  int //Term of candidate’s last log entry
 
 	//from int //谁发出的
 }
@@ -241,15 +241,6 @@ func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *Request
 	return ok
 }
 
-// compareLog :
-//	return true if A is older(outdated) than B
-func compareLog(lastTermA int, lastIndexA int, lastTermB int, lastIndexB int) bool {
-	if lastTermA != lastTermB {
-		return lastTermA < lastTermB
-	}
-	return lastIndexA < lastIndexB
-}
-
 // RequestVote 其它server对于sendRequestVote的处理
 // example RequestVote RPC handlr.
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
@@ -262,8 +253,6 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	reply.Term = rf.currentTerm
 
 	lastLogIndex := rf.lastLogIndex()
-	isCandidateOutdated := compareLog(args.LastLogTerm,
-		args.LastLogIndex, rf.log[lastLogIndex].Term, lastLogIndex)
 	//如果args的不是最新的
 	if (args.LastLogTerm < rf.log[lastLogIndex].Term) ||
 		(args.LastLogTerm == rf.log[lastLogIndex].Term && args.LastLogIndex < lastLogIndex) {
@@ -273,7 +262,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 		reason := ""
 		if rf.currentTerm > args.Term {
 			reason = "RPC term is outdated"
-		} else if isCandidateOutdated {
+		} else if args.LastLogTerm == rf.log[lastLogIndex].Term && args.LastLogIndex < lastLogIndex {
 			reason = "Candidate's log is outdated"
 		}
 		log.Printf("refuse to vote for Node %d(Term %d), %s", args.CandidateId, args.Term, reason)
@@ -432,33 +421,6 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	//log.Print("raft->Start")
 
-	/*var term int
-	var index int
-	var isLeader bool
-
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
-	term = rf.currentTerm
-	if rf.state == LEADER {
-		isLeader = true
-
-		newLogEntry := LogEntry{Command: command, Term: term}
-		rf.log = append(rf.log, newLogEntry) //leader增加新条目
-
-		//持久化
-		//rf.persist() ///todo 持久化应该放在哪里？
-
-		//index = len(rf.log) - 1
-		//更新自己
-		lastLogIndex := rf.lastLogIndex()
-		rf.nextIndex[rf.me] = lastLogIndex + 1
-		rf.matchIndex[rf.me] = lastLogIndex
-		index = lastLogIndex
-	} else {
-		isLeader = false
-		index = -1
-	}*/
 	index := -1
 	term := -1
 	isLeader := false
@@ -617,7 +579,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			time.Sleep(duration * time.Millisecond)
 
 			//发起选举
-			rf.mu.Lock()
+			rf.mu.Lock() //调用ellect需要加锁
 			if rf.state == CANDIDATE {
 				rf.elect()
 			} else {
@@ -638,7 +600,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			time.Sleep(heartbeatTimeout * time.Millisecond)
 
 			//发送心跳
-			rf.mu.Lock()
+			rf.mu.Lock() //调用heartbeat需要加锁
 			if rf.state == LEADER {
 				rf.heartbeat()
 			} else {
