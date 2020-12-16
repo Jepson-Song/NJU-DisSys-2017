@@ -619,81 +619,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			rf.mu.Lock()
 
 			if rf.state == CANDIDATE {
-				log.Printf("start to request votes for term %d", rf.currentTerm+1)
-				//counter := 0
-				rf.voteCount = 0
-				//lastTerm := 0
-				//logLen := len(rf.log)
-				/*if logLen > 0 {
-					lastTerm = rf.log[logLen-1].Term
-				}*/
-				lastIndex := rf.lastLogIndex() //logLen - 1
-				requestTerm := rf.currentTerm + 1
-				lastTerm := rf.log[lastIndex].Term
-				requestVoteArgs := RequestVoteArgs{requestTerm, rf.me, lastTerm, lastIndex}
-				//requestVoteReply := make([]RequestVoteReply, len(rf.peers))
-
-				/*var requestVoteArgs RequestVoteArgs
-				requestVoteArgs.Term = rf.currentTerm + 1
-				requestVoteArgs.CandidateId = rf.me
-				lastLogIndex := rf.lastLogIndex()
-				requestVoteArgs.LastLogTerm = rf.log[lastLogIndex].Term
-				requestVoteArgs.LastLogIndex = lastLogIndex*/
-
-				for server := range rf.peers {
-					go func(server int) {
-						var requestVoteReply RequestVoteReply
-						//向sever发送请求投票的rpc
-						ok := rf.sendRequestVote(server, requestVoteArgs, &requestVoteReply)
-
-						if ok { //call成功
-							//加锁
-							rf.mu.Lock()
-							//如果回复的term更大，则更新自己的term并退回follower
-							if requestVoteReply.Term > rf.currentTerm {
-								rf.changeStateTo(FLLOWER)
-								rf.currentTerm = requestVoteReply.Term
-								//持久化
-								rf.persist()
-							} else if requestVoteArgs.Term == rf.currentTerm {
-								if requestVoteReply.VoteGranted {
-									//如果回复的term相等并且同意投票
-									//counterLock.Lock()
-									//counter++
-									//投票计数器增加一票
-									rf.voteCount++
-									/*if rf.voteCount != counter {
-										log.Printf("*****\n*****\n*****\n*****\n*****\n*****\n*****\n*****\n*****\n*****\n*****\n")
-										return
-									}*/
-									if rf.voteCount > len(rf.peers)/2 && rf.state != LEADER {
-										rf.state = LEADER
-										rf.currentTerm = requestTerm
-										rf.nextIndex = make([]int, len(rf.peers))
-										rf.matchIndex = make([]int, len(rf.peers))
-										// immediately send heartbeats to others to stop election
-										for i := range rf.peers {
-											rf.nextIndex[i] = len(rf.log)
-										}
-										rf.persist()
-
-										log.Printf("become leader for term %d, nextIndex = %v, requestVoteArgs = %v", rf.currentTerm, rf.nextIndex, requestVoteArgs)
-									}
-									//counterLock.Unlock()
-								} else {
-									//拒绝投票
-								}
-							} else {
-								//requestVoteArgs.Term < rf.currentTerm
-								log.Printf("requestVoteArgs.Term < rf.currentTerm")
-							}
-							rf.mu.Unlock()
-						} else { //call失败
-							//log.Printf("Call失败")
-						}
-
-					}(server)
-				}
+				rf.startElection()
 			}
 			rf.mu.Unlock()
 		}
@@ -786,6 +712,76 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		}
 	}()
 	return rf ///
+}
+
+func (rf *Raft) startElection() {
+	//log.Println(rf.m1[rf.state], rf.me, "开始选举...")
+	//rf.mu.Lock()       ///TODO 这个锁应该加在哪里？
+	//rf.mu.Unlock()
+	log.Printf("start to request votes for term %d", rf.currentTerm+1)
+	//选举开始时将rf得到的选票置位0
+	rf.votedFor = rf.me //投票给自己
+	rf.voteCount = 0    ///TODO 自己的票算不算？
+
+	var requestVoteArgs RequestVoteArgs
+	requestVoteArgs.Term = rf.currentTerm + 1
+	requestVoteArgs.CandidateId = rf.me
+	lastLogIndex := rf.lastLogIndex()
+	requestVoteArgs.LastLogTerm = rf.log[lastLogIndex].Term
+	requestVoteArgs.LastLogIndex = lastLogIndex
+
+	for server := range rf.peers {
+		go func(server int) {
+			var requestVoteReply RequestVoteReply
+			//向sever发送请求投票的rpc
+			ok := rf.sendRequestVote(server, requestVoteArgs, &requestVoteReply)
+
+			if ok { //call成功
+				//加锁
+				rf.mu.Lock()
+				//如果回复的term更大，则更新自己的term并退回follower
+				if requestVoteReply.Term > rf.currentTerm {
+					rf.changeStateTo(FLLOWER)
+					rf.currentTerm = requestVoteReply.Term
+					//持久化
+					rf.persist()
+				} else if requestVoteArgs.Term == rf.currentTerm {
+					if requestVoteReply.VoteGranted {
+						//如果回复的term相等并且同意投票
+						//投票计数器增加一票
+						rf.voteCount++
+						if rf.voteCount > len(rf.peers)/2 && rf.state != LEADER {
+							//rf.state = LEADER
+							rf.changeStateTo(LEADER)
+							rf.currentTerm = requestVoteArgs.Term //这里很关键，不能用自己的任期自增
+							//当选后任期才增加
+							//rf.currentTerm++
+							rf.nextIndex = make([]int, len(rf.peers))
+							rf.matchIndex = make([]int, len(rf.peers))
+							// immediately send heartbeats to others to stop election
+							for i := range rf.peers {
+								//rf.nextIndex设置为leader的最后一个entry的index+1
+								rf.nextIndex[i] = rf.lastLogIndex() + 1
+							}
+							//持久化
+							rf.persist()
+
+							log.Printf("become leader for term %d, nextIndex = %v, requestVoteArgs = %v", rf.currentTerm, rf.nextIndex, requestVoteArgs)
+						}
+					} else {
+						//拒绝投票
+					}
+				} else {
+					//requestVoteArgs.Term < rf.currentTerm
+					log.Printf("requestVoteArgs.Term < rf.currentTerm")
+				}
+				rf.mu.Unlock()
+			} else { //call失败
+				//log.Printf("Call失败")
+			}
+
+		}(server)
+	}
 }
 
 func (rf *Raft) stateMachine() {
