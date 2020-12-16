@@ -597,7 +597,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	*/
 	// candidate thread
 	go func() {
-		var counterLock sync.Mutex ///删掉之后backup有可能过不了
+		//var counterLock sync.Mutex ///删掉之后backup有可能过不了
 		for {
 			/*if rf.isKilled {
 				return
@@ -620,7 +620,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 			if rf.state == CANDIDATE {
 				log.Printf("start to request votes for term %d", rf.currentTerm+1)
-				counter := 0
+				//counter := 0
+				rf.voteCount = 0
 				//lastTerm := 0
 				//logLen := len(rf.log)
 				/*if logLen > 0 {
@@ -650,16 +651,22 @@ func Make(peers []*labrpc.ClientEnd, me int,
 							rf.mu.Lock()
 							//如果回复的term更大，则更新自己的term并退回follower
 							if requestVoteReply.Term > rf.currentTerm {
-								rf.currentTerm = requestVoteReply.Term
 								rf.changeStateTo(FLLOWER)
+								rf.currentTerm = requestVoteReply.Term
 								//持久化
 								rf.persist()
 							} else if requestVoteArgs.Term == rf.currentTerm {
 								if requestVoteReply.VoteGranted {
 									//如果回复的term相等并且同意投票
-									counterLock.Lock()
-									counter++
-									if counter > len(rf.peers)/2 && rf.state != LEADER {
+									//counterLock.Lock()
+									//counter++
+									//投票计数器增加一票
+									rf.voteCount++
+									/*if rf.voteCount != counter {
+										log.Printf("*****\n*****\n*****\n*****\n*****\n*****\n*****\n*****\n*****\n*****\n*****\n")
+										return
+									}*/
+									if rf.voteCount > len(rf.peers)/2 && rf.state != LEADER {
 										rf.state = LEADER
 										rf.currentTerm = requestTerm
 										rf.nextIndex = make([]int, len(rf.peers))
@@ -672,7 +679,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 										log.Printf("become leader for term %d, nextIndex = %v, requestVoteArgs = %v", rf.currentTerm, rf.nextIndex, requestVoteArgs)
 									}
-									counterLock.Unlock()
+									//counterLock.Unlock()
 								} else {
 									//拒绝投票
 								}
