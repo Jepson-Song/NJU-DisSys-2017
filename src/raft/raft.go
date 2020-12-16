@@ -654,24 +654,31 @@ func Make(peers []*labrpc.ClientEnd, me int,
 								rf.changeStateTo(FLLOWER)
 								//持久化
 								rf.persist()
-							} else if (requestVoteArgs.Term == rf.currentTerm) && requestVoteReply.VoteGranted {
-								//如果回复的term相等并且同意投票
-								counterLock.Lock()
-								counter++
-								if counter > len(rf.peers)/2 && rf.state != LEADER {
-									rf.state = LEADER
-									rf.currentTerm = requestTerm
-									rf.nextIndex = make([]int, len(rf.peers))
-									rf.matchIndex = make([]int, len(rf.peers))
-									// immediately send heartbeats to others to stop election
-									for i := range rf.peers {
-										rf.nextIndex[i] = len(rf.log)
-									}
-									rf.persist()
+							} else if requestVoteArgs.Term == rf.currentTerm {
+								if requestVoteReply.VoteGranted {
+									//如果回复的term相等并且同意投票
+									counterLock.Lock()
+									counter++
+									if counter > len(rf.peers)/2 && rf.state != LEADER {
+										rf.state = LEADER
+										rf.currentTerm = requestTerm
+										rf.nextIndex = make([]int, len(rf.peers))
+										rf.matchIndex = make([]int, len(rf.peers))
+										// immediately send heartbeats to others to stop election
+										for i := range rf.peers {
+											rf.nextIndex[i] = len(rf.log)
+										}
+										rf.persist()
 
-									log.Printf("become leader for term %d, nextIndex = %v, requestVoteArgs = %v", rf.currentTerm, rf.nextIndex, requestVoteArgs)
+										log.Printf("become leader for term %d, nextIndex = %v, requestVoteArgs = %v", rf.currentTerm, rf.nextIndex, requestVoteArgs)
+									}
+									counterLock.Unlock()
+								} else {
+									//拒绝投票
 								}
-								counterLock.Unlock()
+							} else {
+								//requestVoteArgs.Term < rf.currentTerm
+								log.Printf("requestVoteArgs.Term < rf.currentTerm")
 							}
 							rf.mu.Unlock()
 						} else { //call失败
