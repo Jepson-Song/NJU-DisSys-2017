@@ -299,43 +299,6 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 
 }
 
-/*
-
-func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) { /// copy
-	// Your code here (2A, 2B).
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
-	logLen := len(rf.log)
-	lastIndex := logLen - 1
-	isCandidateOutdated := compareLog(args.LastLogTerm,
-		args.LastLogIndex, rf.log[lastIndex].Term, lastIndex)
-
-	reply.Term = rf.currentTerm
-
-	if rf.currentTerm <= args.Term && // if the rpc is not outdated
-		!isCandidateOutdated { // and if the candidate is not outdated
-		rf.state = FLLOWER
-		rf.currentTerm = args.Term
-		reply.VoteGranted = true
-		rf.votedFor = args.CandidateId
-		rf.persist()
-
-		log.Printf("accept vote for Node %d(Term %d), %v",
-			args.CandidateId, args.Term, []int{args.LastLogTerm, args.LastLogIndex, rf.log[lastIndex].Term, lastIndex})
-	} else {
-		reply.VoteGranted = false
-		reason := ""
-		if rf.currentTerm > args.Term {
-			reason = "RPC term is outdated"
-		} else if isCandidateOutdated {
-			reason = "Candidate's log is outdated"
-		}
-		log.Printf("refuse to vote for Node %d(Term %d), %s", args.CandidateId, args.Term, reason)
-	}
-}
-*/
-
 // AppendEntriesArgs struct
 // example AppendEntriesArgs RPC arguments structure.
 type AppendEntriesArgs struct {
@@ -503,29 +466,12 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		index = len(rf.log)
 		term = rf.currentTerm
 		isLeader = true
-		newEntry := LogEntry{rf.currentTerm, command}
-		rf.log = append(rf.log, newEntry)
+		//newEntry := LogEntry{rf.currentTerm, command}
+		rf.log = append(rf.log, LogEntry{rf.currentTerm, command})
 		rf.matchIndex[rf.me] = len(rf.log)
-
-		rf.persist()
+		//持久化
+		rf.persist() ///todo
 	}
-	/*******************/
-	/*if rf.state != LEADER {
-		return nilIndex, nilIndex, false
-	}
-
-	// Your code here (2B).
-
-	logLen := len(rf.log)
-	index := logLen
-	term := rf.currentTerm
-	isLeader := true
-
-	thisEntry := LogEntry{rf.currentTerm, command}
-	rf.log = append(rf.log, thisEntry)
-	rf.matchIndex[rf.me] = len(rf.log)
-
-	rf.persist()*/
 
 	return index, term, isLeader
 }
@@ -539,11 +485,12 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 func (rf *Raft) Kill() {
 	//log.Print("raft->Kill")
 	// Your code here, if desired.
-	log.Printf("is killed")
-	// TODO: exit go routines if killed
 	rf.isKilled = true
+	log.Printf("is killed")
 }
 
+//lastLogIndex：
+//返回rf的log的index
 func (rf *Raft) lastLogIndex() int {
 	return len(rf.log) - 1
 }
@@ -582,68 +529,53 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.m1[2] = "CANDIDATE"
 	rf.m1[3] = "LEADER"
 
+	// 异步执行循环
+	//go rf.stateMachine()
+	/**************************************************************/
+
 	//Persistent state on all servers
 	rf.currentTerm = 0           //初始Term为0
 	rf.votedFor = -1             //初始没有投票
 	rf.log = make([]LogEntry, 1) //0位置放置一个空条目，后续的条目index从1开始
 
-	rf.readPersist(persister.ReadRaftState()) ///?
-
-	rf.state = FLLOWER
-	// initialize from state persisted before a crash
-	//rf.readPersist(persister.ReadRaftState())
-
-	//rf.mu.Lock() ///todo
-	//rf.readPersist(persister.ReadRaftState())
-	//rf.mu.Unlock()
-	//rf.readPersist
-
 	//Volatile state on all servers
 	rf.commitIndex = 0 //初始committed为0
 	rf.lastApplied = 0 //初始entry applied为0*/
 
-	/*
-		//Volatile state on leaders
-		rf.nextIndex = make([]int, len(rf.peers))  //leader要发给每一个server的下一个log的index
-		rf.matchIndex = make([]int, len(rf.peers)) //每一个server已知的最高的已经replicated的log的index
-		for server := range rf.nextIndex {
-			//初始nextIndex为leader最后一个log的index+1
-			rf.nextIndex[server] = rf.lastLogIndex() + 1
-		}
-		for server := range rf.nextIndex {
-			//初始matchIndex为0
-			rf.matchIndex[server] = 0
-		}
+	//Volatile state on leaders
+	rf.nextIndex = make([]int, len(rf.peers))  //leader要发给每一个server的下一个log的index
+	rf.matchIndex = make([]int, len(rf.peers)) //每一个server已知的最高的已经replicated的log的index
+	for server := range rf.nextIndex {
+		//初始nextIndex为leader最后一个log的index+1
+		rf.nextIndex[server] = rf.lastLogIndex() + 1
+	}
+	for server := range rf.nextIndex {
+		//初始matchIndex为0
+		rf.matchIndex[server] = 0
+	}
 
-		////log.Println(rf.m1[rf.state], rf.me, "rf.nextIndex", rf.nextIndex)
-		//初始身份都是follower
+	//初始身份都是follower
+	rf.state = FLLOWER
+	/*
 		rand.Seed(time.Now().UnixNano())                                                         //设置随机种子
 		rf.electionTimeout = time.NewTimer(time.Duration(rand.Intn(151)+150) * time.Millisecond) //150ms到300ms之间的随机值
 		rf.heartbeatTimeout = time.NewTimer(100 * time.Millisecond)                              //heartbeat的timeout固定为100ms
 
 		rf.applyCh = applyCh ///todo ?
 	*/
-	// 异步执行循环
-	//go rf.stateMachine()
-	/**************************************************************/
-	rf.state = FLLOWER
-	rf.commitIndex = 0
-	rf.votedFor = -1
-	rf.lastApplied = 0
-	rf.currentTerm = 0
-	// rf.log contains a dummy head
-	rf.log = []LogEntry{LogEntry{rf.currentTerm, nil}}
 
 	// initialize from state persisted before a crash
-	rf.readPersist(persister.ReadRaftState())
-
+	//rf.mu.Lock() ///todo
+	rf.readPersist(persister.ReadRaftState()) ///?
+	//rf.mu.Unlock()
 	log.Printf("Initialize")
+
 	// All servers
 	go func() {
 		for {
-			if rf.isKilled {
+			/*if rf.isKilled {
 				return
-			}
+			}*/
 			rf.mu.Lock()
 			for rf.commitIndex > rf.lastApplied {
 				rf.lastApplied++
@@ -661,9 +593,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go func() {
 		var counterLock sync.Mutex
 		for {
-			if rf.isKilled {
+			/*if rf.isKilled {
 				return
-			}
+			}*/
 			rf.mu.Lock()
 			if rf.state == FLLOWER { // ONLY follower would have election timeout
 				rf.state = CANDIDATE
@@ -724,9 +656,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// leader thread
 	go func() {
 		for {
-			if rf.isKilled {
+			/*if rf.isKilled {
 				return
-			}
+			}*/
 			time.Sleep(heartbeatTimeout * time.Millisecond)
 			rf.mu.Lock()
 			// send AppendEntries(as heartbeats) RPC
