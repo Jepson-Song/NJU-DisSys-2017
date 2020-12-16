@@ -576,6 +576,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			/*if rf.isKilled {
 				return
 			}*/
+
 			rf.mu.Lock()
 			for rf.commitIndex > rf.lastApplied {
 				rf.lastApplied++
@@ -585,25 +586,33 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				// Apply rf.log[lastApplied] into its state machine
 			}
 			rf.mu.Unlock()
+
 			time.Sleep(50 * time.Millisecond)
 		}
 	}()
 
+	duration := time.Duration(electionTimeout + rand.Intn(electionRandomFactor*2) - electionRandomFactor)
+	//Random(-electionRandomFactor, electionRandomFactor))
+	time.Sleep(duration * time.Millisecond)
+
 	// candidate thread
 	go func() {
-		var counterLock sync.Mutex
+		var counterLock sync.Mutex ///删掉之后backup有可能过不了
 		for {
 			/*if rf.isKilled {
 				return
 			}*/
+
 			rf.mu.Lock()
 			if rf.state == FLLOWER { // ONLY follower would have election timeout
 				rf.state = CANDIDATE
 			}
 			rf.mu.Unlock()
+
 			duration := time.Duration(electionTimeout + rand.Intn(electionRandomFactor*2) - electionRandomFactor)
 			//Random(-electionRandomFactor, electionRandomFactor))
 			time.Sleep(duration * time.Millisecond)
+
 			rf.mu.Lock()
 
 			if rf.state == CANDIDATE {
