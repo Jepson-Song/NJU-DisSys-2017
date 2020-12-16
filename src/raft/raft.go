@@ -590,11 +590,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			time.Sleep(50 * time.Millisecond)
 		}
 	}()
-
+	/*//可能会导致backup过不了
 	duration := time.Duration(electionTimeout + rand.Intn(electionRandomFactor*2) - electionRandomFactor)
 	//Random(-electionRandomFactor, electionRandomFactor))
 	time.Sleep(duration * time.Millisecond)
-
+	*/
 	// candidate thread
 	go func() {
 		var counterLock sync.Mutex ///删掉之后backup有可能过不了
@@ -605,7 +605,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 			rf.mu.Lock()
 			if rf.state == FLLOWER { // ONLY follower would have election timeout
-				rf.state = CANDIDATE
+				//rf.state = CANDIDATE
+				rf.changeStateTo(CANDIDATE)
 			}
 			rf.mu.Unlock()
 
@@ -634,7 +635,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 						rf.mu.Lock()
 						if rvReplies[index].Term > rf.currentTerm {
 							rf.currentTerm = rvReplies[index].Term
-							rf.state = FLLOWER
+							//rf.state = FLLOWER
+							rf.changeStateTo(FLLOWER)
 							rf.persist()
 						} else if ok && (rvArgs.Term == rf.currentTerm) && rvReplies[index].VoteGranted {
 							counterLock.Lock()
@@ -704,7 +706,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 								} else {
 									if aeReply.Term > rf.currentTerm { // this leader node is outdated
 										rf.currentTerm = aeReply.Term
-										rf.state = FLLOWER
+										//rf.state = FLLOWER
+										rf.changeStateTo(FLLOWER)
 										rf.persist()
 										rf.mu.Unlock()
 										break
