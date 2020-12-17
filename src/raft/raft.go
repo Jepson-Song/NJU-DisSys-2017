@@ -321,47 +321,58 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+
 	reply.Term = rf.currentTerm
-	if rf.currentTerm > args.Term || args.LeaderID == rf.me { // if the rpc is outdated, ignore it
-		// //[12/17] log.Printf("Node %d(Term %d) ignored append from leader %d(Term %d) after entry {%d, %d}",
-		//   rf.me, rf.currentTerm, args.LeaderID, args.Term, args.PrevLogIndex, args.PrevLogTerm)
+
+	if args.LeaderID == rf.me { //不需要给自己sendAppendEntries
+		reply.Success = false
 		return
 	}
+
+	if rf.currentTerm > args.Term { // if the rpc is outdated, ignore it
+		// //[12/17] log.Printf("Node %d(Term %d) ignored append from leader %d(Term %d) after entry {%d, %d}",
+		//   rf.me, rf.currentTerm, args.LeaderID, args.Term, args.PrevLogIndex, args.PrevLogTerm)
+		reply.Success = false //可能会导致concurrent过不了
+		return
+	}
+
 	rf.currentTerm = reply.Term
+
 	if rf.state != FLLOWER {
 		rf.changeStateTo(FLLOWER)
 	}
+
 	/*****************/
-	if rf.lastLogIndex() < args.PrevLogIndex || // if the log doesn't contain prevLogIndex
-		rf.log[args.PrevLogIndex].Term != args.PrevLogTerm { // if the log entry doesn't match the prev log
+	if rf.lastLogIndex() < args.PrevLogIndex || // rf.log的长度比prevLogIndex小
+		rf.log[args.PrevLogIndex].Term != args.PrevLogTerm { // rf.log的term和PrevLogTerm不匹配
 		//[12/17] log.Printf("refuse to append from leader %d(Term %d) after entry {%d, %d}, log not match",
 		//	args.LeaderID, args.Term, args.PrevLogIndex, args.PrevLogTerm)
-		reply.Success = false
+		reply.Success = false //失败
 		conflictIndex := -1
 		//conflictTerm := -1
-		if args.PrevLogIndex <= rf.lastLogIndex() {
+		if rf.lastLogIndex() >= args.PrevLogIndex { // rf.log的长度比prevLogIndex大或相等
 			//conflictTerm := rf.log[args.PrevLogIndex].Term
-			index := args.PrevLogIndex
+			/*index := args.PrevLogIndex
 			for ; index > 0; index-- {
 				if rf.log[index].Term != rf.log[args.PrevLogIndex].Term {
 					break
 				}
-			}
+			}*/
 			//reply.ConflictIndex = index + 1
-			conflictIndex = index + 1
-		} else {
+			conflictIndex = args.PrevLogIndex //- 1 + 1
+		} else { //if rf.lastLogIndex() < args.PrevLogIndex{// rf.log的长度比prevLogIndex小
 			//reply.ConflictIndex = rf.lastLogIndex() + 1
-			conflictIndex = rf.lastLogIndex() + 1
+			conflictIndex = rf.lastLogIndex() + 1 //下一次从log长度+1的index复制日志条目
 		}
 		reply.ConflictIndex = conflictIndex
 		//reply.ConflictTerm = conflictTerm
 	} else {
-		reply.Success = true
+		reply.Success = true //成功
 
 		if len(args.Entries) > 0 {
 			//如果心跳中携带了日志条目，并且match上了
 			//则更新rf的log
-			rf.log = append(rf.log[:args.PrevLogIndex+1], args.Entries...)
+			rf.log = append(rf.log[:args.PrevLogIndex+1], args.Entries...) //从LEADER的nextIndex开始复制
 			//将心跳携带的日志条目添加到rf的log里
 
 			//持久化
@@ -373,7 +384,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 
 		// 更新 commitIndex
 		if rf.commitIndex < args.LeaderCommit {
-			if args.LeaderCommit < rf.lastLogIndex() {
+			if args.LeaderCommit <= rf.lastLogIndex() { //这里本来没有等于//如果LEADERcommit的index没超过rf的logIndex
 				//如果leader的commitIndex不超过rf的log的index
 				//则将rf的commitIndex更新为leader的commitIndex
 				rf.commitIndex = args.LeaderCommit
@@ -382,6 +393,10 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 				//则更新为自己log的最后一个index
 				rf.commitIndex = rf.lastLogIndex()
 			}
+		} else if rf.commitIndex == args.LeaderCommit {
+
+		} else {
+
 		}
 
 		if len(args.Entries) > 0 {
