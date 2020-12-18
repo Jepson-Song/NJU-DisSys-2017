@@ -531,6 +531,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	//初始身份都是follower
 	rf.state = FLLOWER
+
+	rf.applyCh = applyCh
 	/*
 		rand.Seed(time.Now().UnixNano())                                                         //设置随机种子
 		rf.electionTimeout = time.NewTimer(time.Duration(rand.Intn(151)+150) * time.Millisecond) //150ms到300ms之间的随机值
@@ -545,73 +547,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	//rf.mu.Unlock()
 	//[12/17] log.Printf("Initialize")
 
-	// All servers
-	go func() {
-		for {
-			if rf.isKilled {
-				return
-			}
+	// 面向所有sever的线程
+	go rf.applyThread()
 
-			rf.mu.Lock()
-			rf.apply(applyCh)
-			rf.mu.Unlock()
+	// 面向CANDIDATE的线程
+	go rf.candidateThread()
 
-			//time.Sleep(50 * time.Millisecond)
-			threadSleep(50)
-		}
-	}()
-	// CANDIDATE
-	go func() {
-		//var counterLock sync.Mutex ///删掉之后backup有可能过不了
-		for {
-			if rf.isKilled {
-				return
-			}
-
-			rf.mu.Lock()
-			if rf.state == FLLOWER { // ONLY follower would have election timeout
-				//rf.state = CANDIDATE
-				rf.changeStateTo(CANDIDATE)
-				//rf.currentTerm++//变成candidate之后不能立刻修改term，不然会出错
-			}
-			rf.mu.Unlock()
-
-			//CANDIDATE等待一段时间之后发起选举
-			//duration := time.Duration(electionTimeout + rand.Intn(electionRandomFactor*2) - electionRandomFactor)
-			//Random(-electionRandomFactor, electionRandomFactor))
-			//time.Sleep(rf.getDuration() * time.Millisecond)
-			threadSleep(getDuration())
-			//发起选举
-			rf.mu.Lock() //调用ellect需要加锁
-			if rf.state == CANDIDATE {
-				rf.elect()
-			} else {
-				//不是CANDIDATE
-			}
-			rf.mu.Unlock()
-		}
-	}()
-	// LEADER
-	go func() {
-		for {
-			if rf.isKilled {
-				return
-			}
-
-			//等待一段时间之后发送心跳
-			//time.Sleep(heartbeatTimeout * time.Millisecond)
-			threadSleep(heartbeatTimeout)
-
-			//发送心跳
-			rf.mu.Lock() //调用heartbeat需要加锁
-			if rf.state == LEADER {
-				rf.heartbeat()
-			} else {
-				//不是LEADER
-			}
-			rf.mu.Unlock()
-		}
-	}()
+	// 面向LEADER的线程
+	go rf.leaderThread()
 
 	//状态机写法
 	//go rf.stateMachine()
@@ -619,6 +562,90 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	return rf ///
 }
 
+// 应用线程（用go调用）
+func (rf *Raft) applyThread() {
+	// All servers
+	//go func() {
+	for {
+		if rf.isKilled {
+			return
+		}
+
+		rf.mu.Lock()
+		rf.apply(rf.applyCh)
+		rf.mu.Unlock()
+
+		//time.Sleep(50 * time.Millisecond)
+		threadSleep(50)
+	}
+	//}()
+}
+
+// CANDIDATE线程（用go调用）
+func (rf *Raft) candidateThread() {
+
+	//var counterLock sync.Mutex ///删掉之后backup有可能过不了
+	for {
+		//终止
+		if rf.isKilled {
+			return
+		}
+
+		rf.mu.Lock()
+		if rf.state == FLLOWER { // ONLY follower would have election timeout
+			//rf.state = CANDIDATE
+			rf.changeStateTo(CANDIDATE)
+			//rf.currentTerm++//变成candidate之后不能立刻修改term，不然会出错
+		} else if rf.state == LEADER {
+			rf.mu.Unlock()
+			continue
+		} else if rf.state == CANDIDATE {
+			//不做处理
+		}
+		rf.mu.Unlock()
+
+		//CANDIDATE等待一段时间之后发起选举
+		//duration := time.Duration(electionTimeout + rand.Intn(electionRandomFactor*2) - electionRandomFactor)
+		//Random(-electionRandomFactor, electionRandomFactor))
+		//time.Sleep(rf.getDuration() * time.Millisecond)
+		threadSleep(getDuration())
+
+		//发起选举
+		rf.mu.Lock() //调用ellect需要加锁
+		if rf.state == CANDIDATE {
+			//是CANDIDATE则发起选举
+			rf.elect()
+		} else {
+			//不是CANDIDATE
+		}
+		rf.mu.Unlock()
+	}
+}
+
+// LEADER线程（用go调用）
+func (rf *Raft) leaderThread() {
+	for {
+		//终止
+		if rf.isKilled {
+			return
+		}
+
+		//等待一段时间之后发送心跳
+		//time.Sleep(heartbeatTimeout * time.Millisecond)
+		threadSleep(heartbeatTimeout)
+
+		//发送心跳
+		rf.mu.Lock() //调用heartbeat需要加锁
+		if rf.state == LEADER {
+			rf.heartbeat()
+		} else {
+			//不是LEADER
+		}
+		rf.mu.Unlock()
+	}
+}
+
+// 应用到状态机
 func (rf *Raft) apply(applyCh chan ApplyMsg) {
 	//for index:= rf.lastApplied;index<=rf.commitIndex;index++{
 	for rf.commitIndex > rf.lastApplied {
@@ -899,6 +926,10 @@ func (rf *Raft) updateCommitIndex() {
 		if rf.isMajority(commitCounter) {
 			//[12/17] log.Printf("set commitIndex to %d, matchIndex = %v", index, rf.matchIndex)
 			rf.commitIndex = index
+
+			//rf.mu.Lock()
+			//rf.apply(rf.applyCh)
+			//rf.mu.Unlock()
 		}
 	}
 }
