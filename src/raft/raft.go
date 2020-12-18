@@ -329,7 +329,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		return
 	}
 
-	if rf.currentTerm > args.Term { // if the rpc is outdated, ignore it
+	if rf.currentTerm > args.Term { //如果LEADER发来的term反而比rf的小，则直接返回false
 		// //[12/17] log.Printf("Node %d(Term %d) ignored append from leader %d(Term %d) after entry {%d, %d}",
 		//   rf.me, rf.currentTerm, args.LeaderID, args.Term, args.PrevLogIndex, args.PrevLogTerm)
 		reply.Success = false //可能会导致concurrent过不了
@@ -338,6 +338,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 
 	rf.currentTerm = reply.Term
 
+	//如果身份不是FOLLOWER则切换为FOLLOWER
 	if rf.state != FLLOWER {
 		rf.changeStateTo(FLLOWER)
 	}
@@ -384,7 +385,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 
 		// 更新 commitIndex
 		if rf.commitIndex < args.LeaderCommit {
-			if args.LeaderCommit <= rf.lastLogIndex() { //这里本来没有等于//如果LEADERcommit的index没超过rf的logIndex
+			if args.LeaderCommit <= rf.lastLogIndex() { //这里本来没有等于号//如果LEADERcommit的index没超过rf的logIndex
 				//如果leader的commitIndex不超过rf的log的index
 				//则将rf的commitIndex更新为leader的commitIndex
 				rf.commitIndex = args.LeaderCommit
@@ -393,11 +394,19 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 				//则更新为自己log的最后一个index
 				rf.commitIndex = rf.lastLogIndex()
 			}
-		} else if rf.commitIndex == args.LeaderCommit {
-
-		} else {
-
-		}
+		} /*else if rf.commitIndex == args.LeaderCommit { //这种情况好像也不需要考虑
+			if args.LeaderCommit <= rf.lastLogIndex() {
+				//如果leader的commitIndex不超过rf的log的index
+				//则将rf的commitIndex更新为leader的commitIndex
+				rf.commitIndex = args.LeaderCommit
+			} else {
+				//如果超了
+				//则更新为自己log的最后一个index
+				rf.commitIndex = rf.lastLogIndex()
+			}
+		} else { //rf.commitIndex > args.LeaderCommit
+			//应该不存在这种情况
+		}*/
 
 		if len(args.Entries) > 0 {
 			//[12/17] log.Printf("accept append %d entries from leader %d(Term %d) from entry {%d, %d}; commited = %d, leaderCommit = %d, logLen = %d, lastTerm = %d",
@@ -544,13 +553,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			}
 
 			rf.mu.Lock()
-			for rf.commitIndex > rf.lastApplied {
-				rf.lastApplied++
-				applyMsg := ApplyMsg{rf.lastApplied, rf.log[rf.lastApplied].Command, false, nil}
-				applyCh <- applyMsg
-				//[12/17] log.Printf("applied log entry %d:%v", rf.lastApplied, rf.log[rf.lastApplied])
-				// Apply rf.log[lastApplied] into its state machine
-			}
+			rf.apply(applyCh)
 			rf.mu.Unlock()
 
 			//time.Sleep(50 * time.Millisecond)
@@ -614,6 +617,17 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	//go rf.stateMachine()
 
 	return rf ///
+}
+
+func (rf *Raft) apply(applyCh chan ApplyMsg) {
+	//for index:= rf.lastApplied;index<=rf.commitIndex;index++{
+	for rf.commitIndex > rf.lastApplied {
+		rf.lastApplied++
+		applyMsg := ApplyMsg{rf.lastApplied, rf.log[rf.lastApplied].Command, false, nil}
+		applyCh <- applyMsg
+		//[12/17] log.Printf("applied log entry %d:%v", rf.lastApplied, rf.log[rf.lastApplied])
+		// Apply rf.log[lastApplied] into its state machine
+	}
 }
 
 func (rf *Raft) stateMachine() {
@@ -792,9 +806,9 @@ func (rf *Raft) heartbeat() {
 				appendEntriesArgs.Term = rf.currentTerm
 				appendEntriesArgs.LeaderID = rf.me
 				appendEntriesArgs.PrevLogIndex = rf.nextIndex[server] - 1
-				if appendEntriesArgs.PrevLogIndex < 0 { //todo 这里有可能越界，还没找到原因
+				/*if appendEntriesArgs.PrevLogIndex < 0 { //todo 这里有可能越界，还没找到原因
 					appendEntriesArgs.PrevLogIndex = 0
-				}
+				}*/
 				appendEntriesArgs.PrevLogTerm = rf.log[appendEntriesArgs.PrevLogIndex].Term
 				appendEntriesArgs.Entries = rf.log[rf.nextIndex[server]:]
 				appendEntriesArgs.LeaderCommit = rf.commitIndex
@@ -819,6 +833,7 @@ func (rf *Raft) heartbeat() {
 					} else { //LEADER没有过时
 						if appendEntriesReply.Success { //match成功，则更新rf里对于该server的matchIndex和nextIndex
 							rf.matchIndex[server] = rf.lastLogIndex()
+							//如果match成功则把nextIndex设置为自己log的index+1
 							rf.nextIndex[server] = rf.lastLogIndex() + 1
 
 							rf.mu.Unlock()
