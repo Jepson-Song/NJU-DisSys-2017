@@ -38,10 +38,12 @@ const (
 	/*raft0 = "FOLLOWER"
 	raft1 = "CANDIDATE"
 	raft2 = "LEADER"*/
-	electionTimeout      = 400 // ms
-	electionRandomFactor = 100 // ms
-	heartbeatTimeout     = 150 // ms
-	nilIndex             = -1
+	electionTimeout = 150 // ms
+	//electionTimeout      = 400 // ms
+	//electionRandomFactor = 100 // ms
+	//heartbeatTimeout     = 150 // ms
+	heartbeatTimeout = 50 // ms
+	//nilIndex             = -1
 )
 
 // 先声明map
@@ -532,6 +534,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	//初始身份都是follower
 	rf.state = FLLOWER
 
+	//应用到状态机的通道
 	rf.applyCh = applyCh
 	/*
 		rand.Seed(time.Now().UnixNano())                                                         //设置随机种子
@@ -547,14 +550,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	//rf.mu.Unlock()
 	//[12/17] log.Printf("Initialize")
 
-	// 面向所有sever的线程
+	// 选举线程（FOLLOWER和CANDIDATE）
+	go rf.electThread()
+
+	// 心跳线程（LEADER）
+	go rf.heartbeatThread()
+
+	// 应用线程
 	go rf.applyThread()
-
-	// 面向CANDIDATE的线程
-	go rf.candidateThread()
-
-	// 面向LEADER的线程
-	go rf.leaderThread()
 
 	//状态机写法
 	//go rf.stateMachine()
@@ -562,27 +565,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	return rf ///
 }
 
-// 应用线程（用go调用）
-func (rf *Raft) applyThread() {
-	// All servers
-	//go func() {
-	for {
-		if rf.isKilled {
-			return
-		}
-
-		rf.mu.Lock()
-		rf.apply(rf.applyCh)
-		rf.mu.Unlock()
-
-		//time.Sleep(50 * time.Millisecond)
-		threadSleep(50)
-	}
-	//}()
-}
-
-// CANDIDATE线程（用go调用）
-func (rf *Raft) candidateThread() {
+// 选举线程（用go调用）
+func (rf *Raft) electThread() {
 
 	//var counterLock sync.Mutex ///删掉之后backup有可能过不了
 	for {
@@ -622,8 +606,8 @@ func (rf *Raft) candidateThread() {
 	}
 }
 
-// LEADER线程（用go调用）
-func (rf *Raft) leaderThread() {
+// 心跳线程（用go调用）
+func (rf *Raft) heartbeatThread() {
 	for {
 		//终止
 		if rf.isKilled {
@@ -645,86 +629,28 @@ func (rf *Raft) leaderThread() {
 	}
 }
 
-// 应用到状态机
-func (rf *Raft) apply(applyCh chan ApplyMsg) {
-	//for index:= rf.lastApplied;index<=rf.commitIndex;index++{
-	for rf.commitIndex > rf.lastApplied {
-		rf.lastApplied++
-		applyMsg := ApplyMsg{rf.lastApplied, rf.log[rf.lastApplied].Command, false, nil}
-		applyCh <- applyMsg
-		//[12/17] log.Printf("applied log entry %d:%v", rf.lastApplied, rf.log[rf.lastApplied])
-		// Apply rf.log[lastApplied] into its state machine
-	}
-}
-
-func (rf *Raft) stateMachine() {
-	rand.Seed(time.Now().UnixNano())                      //设置随机种子
-	rf.electionTimeout = time.NewTimer(getDuration())     //150ms到300ms之间的随机值
-	rf.heartbeatTimeout = time.NewTimer(heartbeatTimeout) //heartbeat的timeout固定为100ms
-
+// 应用线程（用go调用）
+func (rf *Raft) applyThread() {
+	// All servers
+	//go func() {
 	for {
-		switch rf.state { ///todo 这里应该也要加锁？
-		case FLLOWER:
-			// 当前的身份是follower
-			select {
-			case <-rf.electionTimeout.C: //如果follower的election计时器超时
-				rf.heartbeatTimeout.Stop()
-				rf.electionTimeout.Reset(getDuration())
-				// 变成candidate
-				rf.changeStateTo(CANDIDATE)
-
-			/*case <-rf.voteCh:
-			rf.electionTimeout.Reset(time.Duration(rand.Intn(151)+150) * time.Millisecond)*/
-			default:
-			}
-
-		case CANDIDATE:
-			// 当前的身份是candidate
-			select {
-			case <-rf.electionTimeout.C: //如果candidate的election计时器超时
-				rf.electionTimeout.Reset(getDuration())
-				// 发起新的选举
-				rf.mu.Lock()
-				rf.elect()
-				rf.mu.Unlock()
-			default:
-			}
-
-		case LEADER:
-			// 当前的身份是leader
-			select {
-			case <-rf.heartbeatTimeout.C: //如果leader的heartbeat计时器超时
-				rf.electionTimeout.Stop()
-				rf.heartbeatTimeout.Reset(heartbeatTimeout)
-				//log.Println("LEADER", rf.me, "触发 heartbeatTimeout")
-				// 发送心跳
-				rf.mu.Lock()
-				rf.heartbeat()
-				rf.mu.Unlock()
-			default:
-			}
-		default:
-			//log.Print("raft->Make: 不存在这种身份")
-			// wrong
+		if rf.isKilled {
+			return
 		}
+
+		rf.mu.Lock()
+		rf.apply(rf.applyCh)
+		rf.mu.Unlock()
+
+		//time.Sleep(50 * time.Millisecond)
+		threadSleep(50)
 	}
+	//}()
 }
 
-// 修改rf的身份
-func (rf *Raft) changeStateTo(newState int) {
-	/*if rf.state == FLLOWER && newState == CANDIDATE {
-
-	}
-	if rf.state == CANDIDATE && newState == LEADER {
-		rf.electionTimeout.Stop()
-		rf.heartbeatTimeout.Reset(heartbeatTimeout)
-	}
-	if rf.state == LEADER && newState == FLLOWER {
-		rf.heartbeatTimeout.Stop()
-		rf.electionTimeout.Reset(getDuration())
-	}*/
-
-	rf.state = newState
+// 线程睡眠（单位：毫秒）
+func threadSleep(sleepTime time.Duration) {
+	time.Sleep(sleepTime * time.Millisecond)
 }
 
 // 选举函数（调用需要加锁）
@@ -882,24 +808,15 @@ func (rf *Raft) heartbeat() {
 	rf.updateCommitIndex()
 }
 
-// 线程睡眠（单位：毫秒）
-func threadSleep(sleepTime time.Duration) {
-	time.Sleep(sleepTime * time.Millisecond)
-}
-
-// 得到随机时间段
-func getDuration() time.Duration {
-	duration := time.Duration(electionTimeout + rand.Intn(electionRandomFactor*2) - electionRandomFactor)
-	//Random(-electionRandomFactor, electionRandomFactor))
-	return duration
-}
-
-// 判断是不是majority（是否超过server数量的一一半）
-func (rf *Raft) isMajority(count int) bool {
-	if count > len(rf.peers)/2 {
-		return true
-	} else {
-		return false
+// 应用到状态机
+func (rf *Raft) apply(applyCh chan ApplyMsg) {
+	//for index:= rf.lastApplied;index<=rf.commitIndex;index++{
+	for rf.commitIndex > rf.lastApplied {
+		rf.lastApplied++
+		applyMsg := ApplyMsg{rf.lastApplied, rf.log[rf.lastApplied].Command, false, nil}
+		applyCh <- applyMsg
+		//[12/17] log.Printf("applied log entry %d:%v", rf.lastApplied, rf.log[rf.lastApplied])
+		// Apply rf.log[lastApplied] into its state machine
 	}
 }
 
@@ -930,6 +847,95 @@ func (rf *Raft) updateCommitIndex() {
 			//rf.mu.Lock()
 			//rf.apply(rf.applyCh)
 			//rf.mu.Unlock()
+		}
+	}
+}
+
+// 修改rf的身份
+func (rf *Raft) changeStateTo(newState int) {
+	/*if rf.state == FLLOWER && newState == CANDIDATE {
+
+	}
+	if rf.state == CANDIDATE && newState == LEADER {
+		rf.electionTimeout.Stop()
+		rf.heartbeatTimeout.Reset(heartbeatTimeout)
+	}
+	if rf.state == LEADER && newState == FLLOWER {
+		rf.heartbeatTimeout.Stop()
+		rf.electionTimeout.Reset(getDuration())
+	}*/
+
+	rf.state = newState
+}
+
+// 得到随机时间段
+func getDuration() time.Duration {
+	//duration := time.Duration(electionTimeout + rand.Intn(electionRandomFactor*2) - electionRandomFactor)
+
+	duration := time.Duration(electionTimeout + rand.Intn(electionTimeout+1))
+	//Random(-electionRandomFactor, electionRandomFactor))
+	return duration
+}
+
+// 判断是不是majority（是否超过server数量的一一半）
+func (rf *Raft) isMajority(count int) bool {
+	if count > len(rf.peers)/2 {
+		return true
+	} else {
+		return false
+	}
+}
+
+//状态机写法
+func (rf *Raft) stateMachine() {
+	rand.Seed(time.Now().UnixNano())                      //设置随机种子
+	rf.electionTimeout = time.NewTimer(getDuration())     //150ms到300ms之间的随机值
+	rf.heartbeatTimeout = time.NewTimer(heartbeatTimeout) //heartbeat的timeout固定为100ms
+
+	for {
+		switch rf.state { ///todo 这里应该也要加锁？
+		case FLLOWER:
+			// 当前的身份是follower
+			select {
+			case <-rf.electionTimeout.C: //如果follower的election计时器超时
+				rf.heartbeatTimeout.Stop()
+				rf.electionTimeout.Reset(getDuration())
+				// 变成candidate
+				rf.changeStateTo(CANDIDATE)
+
+			/*case <-rf.voteCh:
+			rf.electionTimeout.Reset(time.Duration(rand.Intn(151)+150) * time.Millisecond)*/
+			default:
+			}
+
+		case CANDIDATE:
+			// 当前的身份是candidate
+			select {
+			case <-rf.electionTimeout.C: //如果candidate的election计时器超时
+				rf.electionTimeout.Reset(getDuration())
+				// 发起新的选举
+				rf.mu.Lock()
+				rf.elect()
+				rf.mu.Unlock()
+			default:
+			}
+
+		case LEADER:
+			// 当前的身份是leader
+			select {
+			case <-rf.heartbeatTimeout.C: //如果leader的heartbeat计时器超时
+				rf.electionTimeout.Stop()
+				rf.heartbeatTimeout.Reset(heartbeatTimeout)
+				//log.Println("LEADER", rf.me, "触发 heartbeatTimeout")
+				// 发送心跳
+				rf.mu.Lock()
+				rf.heartbeat()
+				rf.mu.Unlock()
+			default:
+			}
+		default:
+			//log.Print("raft->Make: 不存在这种身份")
+			// wrong
 		}
 	}
 }
