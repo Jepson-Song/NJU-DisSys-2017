@@ -249,7 +249,8 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 
 	lastLogIndex := rf.lastLogIndex()
 	//如果args的不是最新的
-	if (args.LastLogTerm < rf.log[lastLogIndex].Term) ||
+	if args.Term < rf.currentTerm || //可能会导致concurrent过不了//Figure8和unreliable有时会过//后面的过不了
+		(args.LastLogTerm < rf.log[lastLogIndex].Term) ||
 		(args.LastLogTerm == rf.log[lastLogIndex].Term && args.LastLogIndex < lastLogIndex) {
 		//log.Println("<<< server", rf.me, "term", rf.currentTerm, "不投票")
 		reply.VoteGranted = false
@@ -823,14 +824,15 @@ func (rf *Raft) apply(applyCh chan ApplyMsg) {
 
 // 更新LEADER的commitIndex的函数
 func (rf *Raft) updateCommitIndex() {
-	// Find logs that has appended to majority and update commitIndex
-	for index := rf.commitIndex + 1; index < len(rf.log); index++ {
-		// To eliminate problems like the one in Figure 8,
-		//  Raft never commits log entries from previous terms by count- ing replicas.
+	logLen := len(rf.log)
+	for index := rf.commitIndex + 1; index < logLen; index++ {
+		if rf.log[index].Term > rf.currentTerm {
+			break
+		}
+
+		//只更新当前term的log
 		if rf.log[index].Term < rf.currentTerm {
 			continue
-		} else if rf.log[index].Term > rf.currentTerm {
-			break
 		}
 
 		//统计有多少个server拥有该index的log
@@ -842,12 +844,7 @@ func (rf *Raft) updateCommitIndex() {
 		}
 		// 如果超过一半的server都有该index的log，则更新LEADER的commitIndex
 		if rf.isMajority(commitCounter) {
-			//[12/17] log.Printf("set commitIndex to %d, matchIndex = %v", index, rf.matchIndex)
 			rf.commitIndex = index
-
-			//rf.mu.Lock()
-			//rf.apply(rf.applyCh)
-			//rf.mu.Unlock()
 		}
 	}
 }
