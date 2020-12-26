@@ -78,7 +78,7 @@ type Raft struct {
 	//Persistent state on all servers(Updated on stable storage before responding to RPCs)
 	currentTerm int
 	//latest Term server has seen (initialized to 0 on first boot, increases monotonically)
-	votedFor int        //CandidateId that received vote in current Term (or null if none)//当前任期投票给了谁，没投则是-1
+	votedFor int        //candidateId that received vote in current Term (or null if none)//当前任期投票给了谁，没投则是-1
 	log      []LogEntry //log Entries
 
 	//Volatile state on all servers
@@ -557,6 +557,7 @@ func (rf *Raft) electThread() {
 		if rf.isKilled {
 			return
 		}
+		//threadSleep(getDuration())//todo 计时器放在这里会出问题
 
 		rf.mu.Lock()
 		if rf.state == FLLOWER { // ONLY follower would have election timeout
@@ -657,31 +658,48 @@ func (rf *Raft) elect() {
 		go func(server int) {
 
 			// 身份突然不是CANDIDATE则退出选举
+			rf.mu.Lock()
 			if rf.state != CANDIDATE {
 				//[12/17] log.Printf("身份突然不是CANDIDATE了，退出选举")
+				rf.mu.Unlock()
 				return
 			}
+			rf.mu.Unlock()
 
 			var requestVoteReply RequestVoteReply
 			//向sever发送请求投票的rpc
 			ok := rf.sendRequestVote(server, requestVoteArgs, &requestVoteReply)
 
+			/*rf.mu.Lock()
+			// 身份突然不是CANDIDATE则退出选举
+			if rf.state != CANDIDATE {//这里加上也不对
+				//[12/26] log.Printf("身份突然不是CANDIDATE了，退出选举")
+				rf.mu.Unlock()
+				return
+			}
+			rf.mu.Unlock()*/
+
 			//判断Call"Raft.RequestVote"是否成功
 			if ok { //Call"Raft.RequestVote"成功
 				//加锁
 				rf.mu.Lock()
+				/*if rf.state != CANDIDATE {//这里加上为什么会全错
+					//[12/26] log.Printf("身份突然不是CANDIDATE了，退出选举")
+					rf.mu.Unlock()
+					return
+				}*/
 				//如果回复的term更大，则更新自己的term并退回follower
-				if requestVoteReply.Term > rf.currentTerm {
+				if requestVoteReply.Term > rf.currentTerm { //todo 这里不确定是否要+1
 					rf.changeStateTo(FLLOWER)
 					rf.currentTerm = requestVoteReply.Term
 					//持久化
 					rf.persist()
-				} else if requestVoteArgs.Term == rf.currentTerm {
+				} else { //if requestVoteArgs.Term == rf.currentTerm {//todo去掉这个可能会导致concurrent过不去
 					if requestVoteReply.VoteGranted {
 						//如果回复的term相等并且同意投票
 						//投票计数器增加一票
 						rf.voteCount++
-						if rf.isMajority(rf.voteCount) { //&& rf.state != LEADER {
+						if rf.isMajority(rf.voteCount) && rf.state != LEADER { //如果得到多数投票且不是LEADER//todo这里加上!=LEADER可能导致backup的test过不去但是可能会让fugure8通过
 							//rf.state = LEADER
 							rf.changeStateTo(LEADER)
 							//当选后任期才增加
@@ -702,10 +720,10 @@ func (rf *Raft) elect() {
 					} else {
 						//拒绝投票
 					}
-				} else {
+				} /*else {
 					//requestVoteArgs.Term < rf.currentTerm
 					//[12/17] log.Printf("requestVoteArgs.Term < rf.currentTerm")
-				}
+				}*/
 				rf.mu.Unlock()
 			} else { //Call"Raft.RequestVote" 失败
 				////[12/17] log.Printf("Call"Raft.RequestVote"失败")
