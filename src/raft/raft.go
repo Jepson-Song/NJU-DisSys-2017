@@ -38,15 +38,9 @@ const (
 	/*raft0 = "FOLLOWER"
 	raft1 = "CANDIDATE"
 	raft2 = "LEADER"*/
-	electionTimeout = 150 // ms
-	//electionTimeout      = 400 // ms
-	//electionRandomFactor = 100 // ms
-	//heartbeatTimeout     = 150 // ms
-	heartbeatTimeout = 50 // ms
-	//nilIndex             = -1
+	electionTimeout  = 150 // ms
+	heartbeatTimeout = 50  // ms
 )
-
-// 先声明map
 
 // ApplyMsg struct
 // as each Raft peer becomes aware that Successive log Entries are
@@ -104,10 +98,10 @@ type Raft struct {
 	heartbeatTimeout *time.Timer //leader需要使用的
 
 	//提交
-	applyCh chan ApplyMsg ///
+	applyCh chan ApplyMsg
 
 	//成功投票
-	voteCh chan struct{}
+	//voteCh chan struct{}
 
 	m1 map[int]string /*{
 		0:"FOLLOWER",
@@ -466,12 +460,6 @@ func (rf *Raft) Kill() {
 	//[12/17] log.Printf("is killed")
 }
 
-//lastLogIndex：
-//返回rf的log的index
-func (rf *Raft) lastLogIndex() int {
-	return len(rf.log) - 1
-}
-
 // Make ：
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
@@ -501,11 +489,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here.
-	/*rf.m1 = make(map[int]string)
-	rf.m1[1] = "FOLLOWER"
-	rf.m1[2] = "CANDIDATE"
-	rf.m1[3] = "LEADER"
-
 	// 异步执行循环
 	//go rf.stateMachine()
 	/**************************************************************/
@@ -866,6 +849,12 @@ func (rf *Raft) changeStateTo(newState int) {
 	}*/
 
 	rf.state = newState
+}
+
+//lastLogIndex：
+//返回rf的log的index
+func (rf *Raft) lastLogIndex() int {
+	return len(rf.log) - 1
 }
 
 // 得到随机时间段
